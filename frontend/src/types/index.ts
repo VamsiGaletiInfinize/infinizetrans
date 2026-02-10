@@ -81,3 +81,16 @@ export interface Caption {
   isFinal: boolean;
   timestamp: number;
 }
+
+/* ------------------------------------------------------------------ */
+/*  Chat message (for ChatPanel component)                             */
+/* ------------------------------------------------------------------ */
+
+export interface ChatMessage {
+  id: string;
+  senderAttendeeId: string;
+  senderName: string;
+  originalText: string;
+  translatedText: string;
+  timestamp: number;
+}
