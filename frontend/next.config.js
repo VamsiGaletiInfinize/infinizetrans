@@ -1,7 +1,11 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Enable static export for Amplify hosting
+  output: 'export',
+
   // Chime SDK references some globals that break double-render in strict mode
   reactStrictMode: false,
+
   webpack: (config) => {
     // Some Chime SDK transitive deps reference node built-ins
     config.resolve.fallback = {

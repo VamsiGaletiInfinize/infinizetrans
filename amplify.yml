@@ -7,14 +7,12 @@ frontend:
         - nvm use 18
         - node --version
         - npm --version
-        - ls -la
-        - pwd
         - npm ci --prefix frontend
     build:
       commands:
         - npm run build --prefix frontend
   artifacts:
-    baseDirectory: frontend/.next
+    baseDirectory: frontend/out
     files:
       - '**/*'
   cache:
