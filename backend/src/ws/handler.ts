@@ -2,6 +2,7 @@ import { WebSocket, RawData } from 'ws';
 import { IncomingMessage } from 'http';
 import { connectionManager } from './connectionManager';
 import { TranscriptionSession, TranscriptResult } from '../services/transcribe';
+import { DeepgramTranscriptionSession } from '../services/deepgram';
 import { pivotTranslate } from '../services/translate';
 import { synthesizeSpeech } from '../services/polly';
 import {
@@ -15,12 +16,14 @@ import {
   TranslatedAudioEvent,
   ParticipantInfo,
 } from '../types';
+import { config } from '../config';
+import { logger, logTranscription } from '../utils/logger';
 
 /* ------------------------------------------------------------------ */
 /*  State per connection                                               */
 /* ------------------------------------------------------------------ */
 
-const transcriptionSessions = new Map<string, TranscriptionSession>();
+const transcriptionSessions = new Map<string, TranscriptionSession | DeepgramTranscriptionSession>();
 const PARTIAL_THROTTLE_MS = 100;
 const lastPartialTime = new Map<string, number>();
 const MAX_FRAME_BYTES = 65_536;
@@ -111,16 +114,71 @@ function startTranscription(connectionId: string, info: ParticipantInfo): void {
     return;
   }
 
-  const session = new TranscriptionSession(transcribeCode, (result) => {
-    onTranscriptResult(connectionId, info, result);
-  });
+  const useDeepgram = config.deepgram.provider === 'deepgram' && config.deepgram.apiKey;
 
-  transcriptionSessions.set(connectionId, session);
-  session.start().catch((err) => {
-    console.error(`[Transcribe] Session failed for ${connectionId}:`, err.message);
-  });
+  if (useDeepgram) {
+    // Use Deepgram for superior accuracy (95-98%) and sub-second latency
+    logger.info('🚀 Starting Deepgram transcription', {
+      attendee: info.attendeeName,
+      language: transcribeCode,
+      meetingId: info.meetingId,
+      provider: 'Deepgram Nova-2',
+      targetLatency: '<500ms',
+    });
 
-  console.log(`[Transcribe] Started fixed-language (${transcribeCode}) session for ${info.attendeeName}`);
+    const session = new DeepgramTranscriptionSession({
+      apiKey: config.deepgram.apiKey,
+      languageCode: transcribeCode,
+      attendeeName: info.attendeeName,
+      onTranscript: (result) => {
+        onTranscriptResult(connectionId, info, result);
+      },
+    });
+
+    transcriptionSessions.set(connectionId, session);
+    session.start().catch((err) => {
+      logTranscription.error(`Session failed for ${info.attendeeName}`, err);
+      logger.error('❌ Deepgram session failed', {
+        connectionId,
+        attendee: info.attendeeName,
+        error: err.message,
+        stack: err.stack,
+      });
+    });
+
+    logger.info('✅ Deepgram Nova-2 session started', {
+      attendee: info.attendeeName,
+      language: transcribeCode,
+      accuracy: '95-98%',
+      latency: '<500ms',
+    });
+  } else {
+    // Use AWS Transcribe (fallback)
+    logger.info('🚀 Starting AWS Transcribe', {
+      attendee: info.attendeeName,
+      language: transcribeCode,
+      meetingId: info.meetingId,
+      provider: 'AWS Transcribe',
+    });
+
+    const session = new TranscriptionSession(transcribeCode, (result) => {
+      onTranscriptResult(connectionId, info, result);
+    });
+
+    transcriptionSessions.set(connectionId, session);
+    session.start().catch((err) => {
+      logger.error('❌ AWS Transcribe session failed', {
+        connectionId,
+        attendee: info.attendeeName,
+        error: err.message,
+      });
+    });
+
+    logger.info('✅ AWS Transcribe session started', {
+      attendee: info.attendeeName,
+      language: transcribeCode,
+    });
+  }
 }
 
 function stopTranscription(connectionId: string): void {

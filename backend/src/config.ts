@@ -12,4 +12,8 @@ export const config = {
   dynamodb: {
     tableName: process.env.DYNAMODB_TABLE_NAME || 'infinize-meetings',
   },
+  deepgram: {
+    apiKey: process.env.DEEPGRAM_API_KEY || '',
+    provider: process.env.TRANSCRIPTION_PROVIDER || 'deepgram', // 'deepgram' or 'aws'
+  },
 };
