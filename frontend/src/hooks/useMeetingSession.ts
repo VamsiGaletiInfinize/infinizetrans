@@ -35,6 +35,8 @@ export function useMeetingSession(
   const [micStream, setMicStream] = useState<MediaStream | null>(null);
   const [muted, setMuted] = useState(false);
   const [videoOn, setVideoOn] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   const sessionRef = useRef<DefaultMeetingSession | null>(null);
 
@@ -111,9 +113,16 @@ export function useMeetingSession(
 
         av.start();
         av.startLocalVideoTile();
-        if (!cancelled) setJoined(true);
-      } catch (err) {
+        if (!cancelled) {
+          setJoined(true);
+          setError(null);
+        }
+      } catch (err: any) {
         console.error('[Chime] Start failed:', err);
+        if (!cancelled) {
+          setError(err.message || 'Failed to connect to video meeting');
+          setJoined(false);
+        }
       }
     })();
 
@@ -128,7 +137,7 @@ export function useMeetingSession(
       setMicStream(null);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [meetingData, attendeeData]);
+  }, [meetingData, attendeeData, retryCount]);
 
   /* ---------- bind video element ---------- */
   const bindVideo = useCallback(
@@ -170,6 +179,12 @@ export function useMeetingSession(
     setJoined(false);
   }, []);
 
+  /* ---------- retry ---------- */
+  const retry = useCallback(() => {
+    setError(null);
+    setRetryCount(prev => prev + 1);
+  }, []);
+
   return {
     joined,
     tiles,
@@ -177,9 +192,11 @@ export function useMeetingSession(
     micStream,
     muted,
     videoOn,
+    error,
     bindVideo,
     toggleMute,
     toggleVideo,
     leave,
+    retry,
   };
 }

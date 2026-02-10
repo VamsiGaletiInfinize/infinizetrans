@@ -36,8 +36,31 @@ export function useAudioCapture({
     // 512 samples @ 16 kHz ≈ 32 ms per frame (was 2048 = 128ms)
     const processor = ctx.createScriptProcessor(512, 1, 1);
 
+    // Track last frame timestamp to prevent echo/feedback loops
+    let lastFrameTime = 0;
+    const MIN_FRAME_INTERVAL_MS = 25; // Minimum 25ms between frames
+
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
+      // Prevent audio feedback loop by debouncing rapid frames
+      const now = Date.now();
+      if (now - lastFrameTime < MIN_FRAME_INTERVAL_MS) {
+        return; // Skip this frame to prevent echo
+      }
+      lastFrameTime = now;
+
       const float32 = e.inputBuffer.getChannelData(0);
+
+      // Detect and filter out silent or very quiet audio (possible echo/noise)
+      let sumSquares = 0;
+      for (let i = 0; i < float32.length; i++) {
+        sumSquares += float32[i] * float32[i];
+      }
+      const rms = Math.sqrt(sumSquares / float32.length);
+
+      // Skip frames below noise threshold (prevents transcribing silence/echo)
+      if (rms < 0.01) {
+        return;
+      }
 
       // float32 [-1, 1] → int16 [-32768, 32767]
       const int16 = new Int16Array(float32.length);

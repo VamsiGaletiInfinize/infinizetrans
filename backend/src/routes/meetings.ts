@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { v4 as uuid } from 'uuid';
 import { createMeeting, createAttendee, getMeeting } from '../services/chime';
 import { saveMeeting, getMeetingRecord } from '../services/dynamodb';
+import { connectionManager } from '../ws/connectionManager';
 
 export const meetingsRouter = Router();
 
@@ -46,6 +47,17 @@ meetingsRouter.post(
       const { attendeeName } = req.body;
       if (!attendeeName) {
         return res.status(400).json({ error: 'attendeeName is required' });
+      }
+
+      // Check participant limit (2-person maximum for translation support)
+      const currentParticipants = connectionManager.getMeetingParticipants(meetingId);
+      if (currentParticipants.length >= 2) {
+        console.log(`[API] Meeting ${meetingId} is full (${currentParticipants.length} participants)`);
+        return res.status(400).json({
+          error: 'Meeting is full. This application supports 1-on-1 translation (2 participants maximum).',
+          currentParticipants: currentParticipants.length,
+          maxParticipants: 2
+        });
       }
 
       // Look up meeting data (DynamoDB first, then Chime API fallback)

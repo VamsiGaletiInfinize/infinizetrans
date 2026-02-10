@@ -6,6 +6,7 @@ interface VideoTileProps {
   tileId: number;
   isLocal: boolean;
   attendeeId: string;
+  attendeeName?: string;
   bindVideo: (tileId: number, el: HTMLVideoElement) => void;
 }
 
@@ -13,6 +14,7 @@ export default function VideoTile({
   tileId,
   isLocal,
   attendeeId,
+  attendeeName,
   bindVideo,
 }: VideoTileProps) {
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -33,7 +35,7 @@ export default function VideoTile({
         muted={isLocal}
       />
       <span className="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-0.5 text-xs text-white">
-        {isLocal ? 'You' : attendeeId.slice(0, 8)}
+        {isLocal ? 'You' : attendeeName || attendeeId.slice(0, 8)}
       </span>
     </div>
   );
