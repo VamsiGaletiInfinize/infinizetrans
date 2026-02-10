@@ -77,7 +77,7 @@ export async function autoTranslate(
 }
 
 /** Direct single-hop translation. */
-async function translateDirect(
+export async function translateDirect(
   text: string,
   source: string,
   target: string,

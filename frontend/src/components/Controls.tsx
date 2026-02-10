@@ -1,30 +1,20 @@
 'use client';
 
-import { SUPPORTED_LANGUAGES } from '@/lib/languages';
-
 interface ControlsProps {
   muted: boolean;
   videoOn: boolean;
-  translatedAudio: boolean;
-  targetLanguage: string;
   wsConnected: boolean;
   onToggleMute: () => void;
   onToggleVideo: () => void;
-  onToggleAudio: () => void;
-  onTargetLanguageChange: (code: string) => void;
   onLeave: () => void;
 }
 
 export default function Controls({
   muted,
   videoOn,
-  translatedAudio,
-  targetLanguage,
   wsConnected,
   onToggleMute,
   onToggleVideo,
-  onToggleAudio,
-  onTargetLanguageChange,
   onLeave,
 }: ControlsProps) {
   return (
@@ -46,30 +36,6 @@ export default function Controls({
       >
         {videoOn ? 'Cam Off' : 'Cam On'}
       </button>
-
-      <button
-        onClick={onToggleAudio}
-        className={`rounded-lg px-4 py-2 text-sm font-medium ${
-          translatedAudio ? 'bg-green-600 hover:bg-green-700' : 'bg-red-600 hover:bg-red-700'
-        }`}
-      >
-        {translatedAudio ? 'Voice Translation: ON' : 'Voice Translation: OFF'}
-      </button>
-
-      <div className="flex items-center gap-1">
-        <span className="text-xs text-slate-400">Translate to:</span>
-        <select
-          value={targetLanguage}
-          onChange={(e) => onTargetLanguageChange(e.target.value)}
-          className="rounded bg-slate-700 px-2 py-1.5 text-xs text-white outline-none"
-        >
-          {SUPPORTED_LANGUAGES.map((l) => (
-            <option key={l.code} value={l.code}>
-              {l.label}
-            </option>
-          ))}
-        </select>
-      </div>
 
       <div className="flex items-center gap-1 text-xs">
         <span

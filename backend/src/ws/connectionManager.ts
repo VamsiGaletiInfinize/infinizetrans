@@ -16,6 +16,12 @@ class ConnectionManager {
   }
 
   add(connectionId: string, ws: WebSocket, info: ParticipantInfo): void {
+    // Enforce 2-person limit
+    const existing = this.meetingMembers.get(info.meetingId);
+    if (existing && existing.size >= 2) {
+      throw new Error('Meeting is full (2 participants maximum)');
+    }
+
     this.connections.set(connectionId, { ws, info });
 
     if (!this.meetingMembers.has(info.meetingId)) {
@@ -52,9 +58,16 @@ class ConnectionManager {
     return this.connections.get(connectionId);
   }
 
-  updateInfo(connectionId: string, updates: Partial<ParticipantInfo>): void {
-    const conn = this.connections.get(connectionId);
-    if (conn) Object.assign(conn.info, updates);
+  /** Return the OTHER open connection in a 2-person meeting. */
+  getPartner(meetingId: string, myConnectionId: string): ManagedConnection | null {
+    const members = this.meetingMembers.get(meetingId);
+    if (!members) return null;
+    for (const id of members) {
+      if (id === myConnectionId) continue;
+      const conn = this.connections.get(id);
+      if (conn && conn.ws.readyState === WebSocket.OPEN) return conn;
+    }
+    return null;
   }
 
   /** Return all open connections in a meeting. */

@@ -9,24 +9,24 @@ import MeetingView from '@/components/MeetingView';
 interface ActiveMeeting {
   info: MeetingInfo;
   name: string;
-  targetLang: string;
+  spokenLang: string;
 }
 
 export default function Home() {
   const [meeting, setMeeting] = useState<ActiveMeeting | null>(null);
 
   const handleCreate = useCallback(
-    async (name: string, targetLang: string) => {
+    async (name: string, spokenLang: string) => {
       const info = await createMeeting(name);
-      setMeeting({ info, name, targetLang });
+      setMeeting({ info, name, spokenLang });
     },
     [],
   );
 
   const handleJoin = useCallback(
-    async (meetingId: string, name: string, targetLang: string) => {
+    async (meetingId: string, name: string, spokenLang: string) => {
       const info = await joinMeeting(meetingId, name);
-      setMeeting({ info, name, targetLang });
+      setMeeting({ info, name, spokenLang });
     },
     [],
   );
@@ -41,7 +41,7 @@ export default function Home() {
     <MeetingView
       meetingInfo={meeting.info}
       attendeeName={meeting.name}
-      initialTargetLang={meeting.targetLang}
+      spokenLanguage={meeting.spokenLang}
       onLeave={handleLeave}
     />
   );

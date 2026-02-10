@@ -4,14 +4,14 @@ import { useState } from 'react';
 import { SUPPORTED_LANGUAGES } from '@/lib/languages';
 
 interface JoinFormProps {
-  onCreateMeeting: (name: string, targetLang: string) => Promise<void>;
-  onJoinMeeting: (meetingId: string, name: string, targetLang: string) => Promise<void>;
+  onCreateMeeting: (name: string, spokenLang: string) => Promise<void>;
+  onJoinMeeting: (meetingId: string, name: string, spokenLang: string) => Promise<void>;
 }
 
 export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormProps) {
   const [name, setName] = useState('');
   const [meetingId, setMeetingId] = useState('');
-  const [targetLang, setTargetLang] = useState('en-US');
+  const [spokenLang, setSpokenLang] = useState('en-US');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
@@ -20,7 +20,7 @@ export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormPro
     setError('');
     setLoading(true);
     try {
-      await onCreateMeeting(name.trim(), targetLang);
+      await onCreateMeeting(name.trim(), spokenLang);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -34,7 +34,7 @@ export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormPro
     setError('');
     setLoading(true);
     try {
-      await onJoinMeeting(meetingId.trim(), name.trim(), targetLang);
+      await onJoinMeeting(meetingId.trim(), name.trim(), spokenLang);
     } catch (e: any) {
       setError(e.message);
     } finally {
@@ -46,7 +46,7 @@ export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormPro
     <div className="mx-auto mt-20 max-w-md rounded-2xl bg-slate-800 p-8 shadow-xl">
       <h1 className="mb-2 text-center text-2xl font-bold">Infinize Trans</h1>
       <p className="mb-6 text-center text-sm text-slate-400">
-        Real-time multilingual video meetings
+        Real-time voice-to-voice translation
       </p>
 
       {/* Name */}
@@ -58,14 +58,14 @@ export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormPro
         onChange={(e) => setName(e.target.value)}
       />
 
-      {/* Target language */}
+      {/* Spoken language */}
       <label className="mb-1 block text-xs text-slate-400">
-        I want to read/hear in&hellip;
+        I speak&hellip;
       </label>
       <select
         className="mb-6 w-full rounded bg-slate-700 px-3 py-2 text-white outline-none"
-        value={targetLang}
-        onChange={(e) => setTargetLang(e.target.value)}
+        value={spokenLang}
+        onChange={(e) => setSpokenLang(e.target.value)}
       >
         {SUPPORTED_LANGUAGES.map((l) => (
           <option key={l.code} value={l.code}>
@@ -75,7 +75,7 @@ export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormPro
       </select>
 
       <p className="mb-6 -mt-4 text-xs text-slate-500">
-        Speak any language — it will be auto-detected.
+        Your partner&apos;s speech will be automatically translated for you.
       </p>
 
       {/* Create */}
@@ -84,7 +84,7 @@ export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormPro
         disabled={loading}
         onClick={handleCreate}
       >
-        {loading ? 'Please wait…' : 'Create Meeting'}
+        {loading ? 'Please wait\u2026' : 'Create Meeting'}
       </button>
 
       {/* Divider */}
@@ -106,7 +106,7 @@ export default function JoinForm({ onCreateMeeting, onJoinMeeting }: JoinFormPro
         disabled={loading}
         onClick={handleJoin}
       >
-        {loading ? 'Joining…' : 'Join Meeting'}
+        {loading ? 'Joining\u2026' : 'Join Meeting'}
       </button>
 
       {error && (

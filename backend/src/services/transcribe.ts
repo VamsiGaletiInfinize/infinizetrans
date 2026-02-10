@@ -4,15 +4,13 @@ import {
   AudioStream,
 } from '@aws-sdk/client-transcribe-streaming';
 import { config } from '../config';
-import { getTranscribeLanguageOptions } from '../utils/languages';
 
 const client = new TranscribeStreamingClient({ region: config.aws.region });
 
 export interface TranscriptResult {
   text: string;
   isFinal: boolean;
-  /** Transcribe language code detected for this segment (e.g. "en-US") */
-  detectedLanguage?: string;
+  detectedLanguage: string;
   startTimeMs?: number;
   endTimeMs?: number;
 }
@@ -66,28 +64,27 @@ class AudioStreamQueue {
 }
 
 /**
- * TranscriptionSession with auto language detection.
- * Uses IdentifyMultipleLanguages so speakers can switch languages mid-sentence.
- * No manual language selection needed.
+ * TranscriptionSession with fixed language code.
+ * Uses a single LanguageCode for lower latency and higher accuracy.
  */
 export class TranscriptionSession {
   private audioQueue = new AudioStreamQueue();
   private active = true;
   private onTranscript: TranscriptCallback;
+  private languageCode: string;
 
-  constructor(onTranscript: TranscriptCallback) {
+  constructor(languageCode: string, onTranscript: TranscriptCallback) {
+    this.languageCode = languageCode;
     this.onTranscript = onTranscript;
   }
 
   async start(): Promise<void> {
-    const languageOptions = getTranscribeLanguageOptions();
-    console.log(`[Transcribe] Auto-detect languages: ${languageOptions}`);
+    console.log(`[Transcribe] Fixed language session: ${this.languageCode}`);
 
     try {
       const response = await client.send(
         new StartStreamTranscriptionCommand({
-          IdentifyMultipleLanguages: true,
-          LanguageOptions: languageOptions,
+          LanguageCode: this.languageCode as any,
           MediaEncoding: 'pcm',
           MediaSampleRateHertz: 16000,
           AudioStream: this.audioQueue as any,
@@ -106,12 +103,10 @@ export class TranscriptionSession {
           const transcript = result.Alternatives?.[0]?.Transcript;
           if (!transcript) continue;
 
-          const detectedLang = (result as any).LanguageCode as string | undefined;
-
           this.onTranscript({
             text: transcript,
             isFinal: !result.IsPartial,
-            detectedLanguage: detectedLang || undefined,
+            detectedLanguage: this.languageCode,
             startTimeMs: result.StartTime != null
               ? Math.round(result.StartTime * 1000)
               : undefined,

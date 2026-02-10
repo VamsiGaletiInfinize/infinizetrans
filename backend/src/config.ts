@@ -7,7 +7,7 @@ export const config = {
   },
   server: {
     port: parseInt(process.env.PORT || '3001', 10),
-    corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3000',
+    corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:3002',
   },
   dynamodb: {
     tableName: process.env.DYNAMODB_TABLE_NAME || 'infinize-meetings',
