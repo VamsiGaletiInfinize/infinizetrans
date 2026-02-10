@@ -68,7 +68,7 @@ export interface LanguageOption {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Caption display model                                              */
+/*  Caption + Chat display models                                      */
 /* ------------------------------------------------------------------ */
 
 export interface Caption {
@@ -79,5 +79,15 @@ export interface Caption {
   translatedText: string;
   detectedLanguage: string;
   isFinal: boolean;
+  timestamp: number;
+}
+
+export interface ChatMessage {
+  id: string;
+  senderAttendeeId: string;
+  senderName: string;
+  originalText: string;
+  translatedText: string;
+  detectedLanguage: string;
   timestamp: number;
 }
