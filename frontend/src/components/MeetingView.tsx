@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo } from 'react';
+import { useCallback } from 'react';
 import { MeetingInfo } from '@/types';
 import { useMeetingSession } from '@/hooks/useMeetingSession';
 import {
@@ -35,12 +35,10 @@ export default function MeetingView({
     muted,
     videoOn,
     micStream,
-    error,
     bindVideo,
     toggleMute,
     toggleVideo,
     leave,
-    retry,
   } = useMeetingSession(meetingInfo.meeting, meetingInfo.attendee);
 
   const socketOpts: TranslationSocketOptions | null = joined
@@ -67,26 +65,6 @@ export default function MeetingView({
     onAudioFrame: handleAudioFrame,
   });
 
-  // Unified connection status
-  const connectionStatus = useMemo(() => {
-    if (error) return { status: 'error', label: 'Connection Error', color: 'text-red-400' };
-    if (!joined && !connected) return { status: 'connecting', label: 'Connecting...', color: 'text-yellow-400' };
-    if (joined && !connected) return { status: 'video-only', label: 'Video Only (No Translation)', color: 'text-orange-400' };
-    if (!joined && connected) return { status: 'audio-only', label: 'Audio Only (No Video)', color: 'text-orange-400' };
-    return { status: 'connected', label: 'Fully Connected', color: 'text-green-400' };
-  }, [joined, connected, error]);
-
-  // Dynamic grid layout based on participant count
-  const gridLayout = useMemo(() => {
-    const count = tiles.length;
-    if (count === 0) return 'grid-cols-1';
-    if (count === 1) return 'grid-cols-1';
-    if (count === 2) return 'grid-cols-1 md:grid-cols-2';
-    if (count <= 4) return 'grid-cols-2';
-    if (count <= 6) return 'grid-cols-2 md:grid-cols-3';
-    return 'grid-cols-2 md:grid-cols-3 lg:grid-cols-4';
-  }, [tiles.length]);
-
   const handleLeave = () => {
     leave();
     onLeave();
@@ -102,35 +80,18 @@ export default function MeetingView({
             ID: <span className="select-all font-mono">{meetingId}</span>
           </p>
         </div>
-        <div className="flex items-center gap-3">
-          {/* Connection Status Indicator */}
-          <div className="flex items-center gap-2">
-            <div className={`h-2 w-2 rounded-full ${
-              connectionStatus.status === 'connected' ? 'bg-green-400 animate-pulse' :
-              connectionStatus.status === 'error' ? 'bg-red-400' :
-              connectionStatus.status === 'connecting' ? 'bg-yellow-400 animate-pulse' :
-              'bg-orange-400'
-            }`} />
-            <span className={`text-sm ${connectionStatus.color}`}>
-              {connectionStatus.label}
-            </span>
-          </div>
-          {error && (
-            <button
-              onClick={retry}
-              className="rounded bg-blue-600 px-3 py-1 text-xs font-medium text-white hover:bg-blue-700"
-            >
-              Retry Connection
-            </button>
-          )}
-        </div>
+        {!joined && (
+          <span className="animate-pulse text-sm text-yellow-400">
+            Connecting to meeting…
+          </span>
+        )}
       </div>
 
       {/* Main: video + captions panel */}
       <div className="flex flex-1 gap-3 overflow-hidden">
         {/* Video grid */}
         <div className="flex-1">
-          <div className={`grid h-full auto-rows-fr gap-3 ${gridLayout}`}>
+          <div className="grid h-full auto-rows-fr grid-cols-1 gap-3 md:grid-cols-2">
             {tiles.map((t) => (
               <VideoTile
                 key={t.tileId}
