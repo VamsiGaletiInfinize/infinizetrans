@@ -1,0 +1,14 @@
+node_modules/
+.next/
+dist/
+cdk.out/
+.env
+.env.local
+*.js.map
+*.d.ts
+!next.config.js
+!postcss.config.js
+!tailwind.config.ts
+.DS_Store
+Thumbs.db
+*.log
