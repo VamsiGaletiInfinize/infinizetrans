@@ -36,6 +36,8 @@ const MAX_FRAME_BYTES = 65_536;
 interface IncrementalTtsState {
   /** Characters from the original (source-language) partial text already sent for TTS. */
   spokenLength: number;
+  /** Characters confirmed as successfully synthesized and sent to the client. */
+  confirmedLength: number;
   /** Pending TTS promise chain — ensures audio chunks are sent in order. */
   ttsChain: Promise<void>;
   /** Timestamp of last TTS chunk enqueued — for time-based forcing. */
@@ -253,8 +255,22 @@ async function onTranscriptResult(
   // --- Final: TTS only the remaining un-spoken tail ---
   if (isFinal && partner && partner.ws.readyState === WebSocket.OPEN) {
     const state = incrementalTtsState.get(connectionId);
-    const spokenLen = state?.spokenLength ?? 0;
-    const remainingOriginal = text.substring(spokenLen).trim();
+
+    // Wait for all incremental TTS chunks to finish before computing
+    // remaining text. This prevents out-of-order audio delivery.
+    if (state?.ttsChain) {
+      await state.ttsChain;
+    }
+
+    if (state && state.spokenLength !== state.confirmedLength) {
+      console.warn(
+        `[IncrementalTTS] Gap detected: spokenLength=${state.spokenLength}, confirmedLength=${state.confirmedLength}. ` +
+        `Re-synthesizing ${state.spokenLength - state.confirmedLength} chars.`
+      );
+    }
+
+    const confirmedLen = state?.confirmedLength ?? 0;
+    const remainingOriginal = text.substring(confirmedLen).trim();
 
     if (remainingOriginal.length > 0) {
       // Translate just the remaining portion
@@ -322,7 +338,7 @@ function enqueueIncrementalTts(
 
   let state = incrementalTtsState.get(connectionId);
   if (!state) {
-    state = { spokenLength: 0, ttsChain: Promise.resolve(), lastTtsTime: Date.now() };
+    state = { spokenLength: 0, confirmedLength: 0, ttsChain: Promise.resolve(), lastTtsTime: Date.now() };
     incrementalTtsState.set(connectionId, state);
   }
 
@@ -357,8 +373,11 @@ function enqueueIncrementalTts(
   const chunk = originalText.substring(state.spokenLength, chunkEnd).trim();
   if (chunk.length < MIN_TTS_CHARS) return;
 
-  // Update state immediately so the next partial doesn't re-process
-  state.spokenLength = chunkEnd;
+  // Capture the boundary for this specific chunk (closure safety)
+  const thisChunkEnd = chunkEnd;
+
+  // Update spokenLength immediately so the next partial doesn't re-process
+  state.spokenLength = thisChunkEnd;
   state.lastTtsTime = now;
 
   // Chain the TTS work to preserve audio ordering
@@ -386,12 +405,16 @@ function enqueueIncrementalTts(
         };
         partner.ws.send(JSON.stringify(audioEvent));
 
+        // Only advance confirmedLength after successful synthesis + send
+        state!.confirmedLength = thisChunkEnd;
+
         console.log(
           `[IncrementalTTS] ${speaker.attendeeName}: "${chunk.substring(0, 50)}${chunk.length > 50 ? '...' : ''}" → ${targetCode} (${chunk.length}ch)`
         );
       }
     } catch (err: any) {
-      console.error(`[IncrementalTTS] Failed:`, err.message);
+      console.error(`[IncrementalTTS] Failed for "${chunk.substring(0, 30)}":`, err.message);
+      // confirmedLength is NOT advanced — the final handler will pick up this text
     }
   });
 }

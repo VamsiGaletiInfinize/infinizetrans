@@ -9,7 +9,7 @@ export class AudioPlayer {
   private ctx: AudioContext | null = null;
   private queue: string[] = [];
   private playing = false;
-  private static readonly MAX_QUEUE = 20;
+  private static readonly MAX_QUEUE = 50;
   private static readonly DECODE_TIMEOUT_MS = 5000;
 
   private getCtx(): AudioContext {
