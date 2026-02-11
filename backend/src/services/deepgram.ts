@@ -65,7 +65,7 @@ export class DeepgramTranscriptionSession {
         punctuate: true,
         smart_format: true,
         interim_results: true,
-        utterance_end: 500,     // Milliseconds for utterance endpoint detection
+        utterance_end: 500,     // Fires UtteranceEnd event after silence (ms)
         endpointing: 150,       // Milliseconds for silence detection
         vad_events: true,
       });
@@ -139,6 +139,13 @@ export class DeepgramTranscriptionSession {
             detectedLanguage: this.languageCode,
           });
         }
+      });
+
+      // Event: Utterance end (fired when utterance_end_ms silence detected)
+      this.connection.on(LiveTranscriptionEvents.UtteranceEnd, () => {
+        logger.info('🔚 Deepgram UtteranceEnd (500ms silence)', {
+          attendee: this.attendeeName,
+        });
       });
 
       // Event: Metadata received

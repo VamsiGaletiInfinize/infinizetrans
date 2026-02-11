@@ -28,6 +28,19 @@ const PARTIAL_THROTTLE_MS = 100;
 const lastPartialTime = new Map<string, number>();
 const MAX_FRAME_BYTES = 65_536;
 
+/* Translation cache: reuse partial translations on finals to skip redundant API calls */
+const partialTranslationCache = new Map<string, { originalText: string; translatedText: string }>();
+
+/* Polly pre-synthesis: start Polly in background during partials so audio is
+   ready instantly when the final arrives. Throttled to 1 call/second max. */
+interface PreSynthEntry {
+  translatedText: string;
+  audioPromise: Promise<Buffer | null>;
+}
+const preSynthCache = new Map<string, PreSynthEntry>();
+const lastPreSynthTime = new Map<string, number>();
+const PRE_SYNTH_THROTTLE_MS = 1000; // At most 1 background Polly call per second
+
 /* ------------------------------------------------------------------ */
 /*  Entry point                                                        */
 /* ------------------------------------------------------------------ */
@@ -110,6 +123,8 @@ async function handleControlMessage(
         session.finishGracefully();
         transcriptionSessions.delete(connectionId);
         lastPartialTime.delete(connectionId);
+        // Clean up stale partial timer (the finishGracefully final will handle Polly)
+        cleanupPartialState(connectionId);
       } else {
         stopTranscription(connectionId);
       }
@@ -165,7 +180,7 @@ function startTranscription(connectionId: string, info: ParticipantInfo): void {
       attendee: info.attendeeName,
       language: transcribeCode,
       meetingId: info.meetingId,
-      provider: 'Deepgram Nova-2',
+      provider: 'Deepgram Nova-3',
       targetLatency: '<500ms',
     });
 
@@ -189,7 +204,7 @@ function startTranscription(connectionId: string, info: ParticipantInfo): void {
       });
     });
 
-    logger.info('✅ Deepgram Nova-2 session started', {
+    logger.info('✅ Deepgram Nova-3 session started', {
       attendee: info.attendeeName,
       language: transcribeCode,
       accuracy: '95-98%',
@@ -231,6 +246,13 @@ function stopTranscription(connectionId: string): void {
     transcriptionSessions.delete(connectionId);
     lastPartialTime.delete(connectionId);
   }
+  cleanupPartialState(connectionId);
+}
+
+function cleanupPartialState(connectionId: string): void {
+  preSynthCache.delete(connectionId);
+  lastPreSynthTime.delete(connectionId);
+  partialTranslationCache.delete(connectionId);
 }
 
 /* ------------------------------------------------------------------ */
@@ -265,15 +287,29 @@ async function onTranscriptResult(
     ? getTranslateCode(partner.info.spokenLanguage)
     : getTranslateCode(speaker.targetLanguage);
 
-  // Translate (pivotTranslate internally optimizes for English pairs → 1 hop)
+  // Translate — reuse cached partial translation on finals when text matches
   let translatedText = text;
+  let usedCache = false;
   if (srcLang !== targetCode) {
-    try {
-      const r = await pivotTranslate(text, srcLang, targetCode);
-      translatedText = r.translatedText;
-    } catch (err: any) {
-      console.error(`[Translate] ${srcLang}→${targetCode} failed:`, err.message);
-      translatedText = text;
+    const cached = partialTranslationCache.get(connectionId);
+    if (isFinal && cached && cached.originalText === text) {
+      translatedText = cached.translatedText;
+      usedCache = true;
+    } else {
+      try {
+        const r = await pivotTranslate(text, srcLang, targetCode);
+        translatedText = r.translatedText;
+      } catch (err: any) {
+        console.error(`[Translate] ${srcLang}→${targetCode} failed:`, err.message);
+        translatedText = text;
+      }
+    }
+
+    // Cache partial translations for reuse on finals
+    if (!isFinal) {
+      partialTranslationCache.set(connectionId, { originalText: text, translatedText });
+    } else {
+      partialTranslationCache.delete(connectionId);
     }
   }
 
@@ -298,32 +334,63 @@ async function onTranscriptResult(
     partner.ws.send(JSON.stringify(caption));
   }
 
-  // For final transcripts: synthesize TTS and send audio to partner
+  // --- Background Polly pre-synthesis ---
+  // Start Polly in the background during partials so the audio is ready
+  // instantly when the final arrives. Throttled to 1 call/sec to limit cost.
+  if (!isFinal && partner && translatedText.length > 10) {
+    const now = Date.now();
+    const lastTime = lastPreSynthTime.get(connectionId) ?? 0;
+    if (now - lastTime >= PRE_SYNTH_THROTTLE_MS) {
+      lastPreSynthTime.set(connectionId, now);
+      preSynthCache.set(connectionId, {
+        translatedText,
+        audioPromise: synthesizeSpeech(translatedText, partner.info.spokenLanguage).catch(() => null),
+      });
+    }
+  }
+
+  // --- Final transcript: synthesize TTS and send audio to partner ---
   if (isFinal && partner && partner.ws.readyState === WebSocket.OPEN) {
+    const tPollyStart = Date.now();
+
+    // Check if we have pre-synthesized audio that matches
+    const cached = preSynthCache.get(connectionId);
+    preSynthCache.delete(connectionId);
+    lastPreSynthTime.delete(connectionId);
+
+    let audioBuffer: Buffer | null = null;
+    let usedPreSynth = false;
+
+    if (cached && cached.translatedText === translatedText) {
+      // Cache hit — Polly was already running in the background
+      audioBuffer = await cached.audioPromise;
+      usedPreSynth = !!audioBuffer;
+    }
+
+    // Fresh synthesis if no cache hit or pre-synth returned null
+    if (!audioBuffer) {
+      try {
+        audioBuffer = await synthesizeSpeech(translatedText, partner.info.spokenLanguage);
+      } catch (err: any) {
+        console.error(`[Polly] Synthesis failed for ${targetCode}:`, err.message);
+      }
+    }
+
     console.log(
       `[Timing] ${speaker.attendeeName} (${srcLang}) → ${partner.info.attendeeName} (${targetCode}): ` +
-      `translate=${tTranslated - t0}ms`
+      `translate=${tTranslated - t0}ms${usedCache ? ' (cached)' : ''}, ` +
+      `polly=${Date.now() - tPollyStart}ms${usedPreSynth ? ' (pre-synth)' : ''}, ` +
+      `total=${Date.now() - t0}ms`
     );
 
-    try {
-      const tPollyStart = Date.now();
-      const audioBuffer = await synthesizeSpeech(translatedText, partner.info.spokenLanguage);
-      if (audioBuffer && partner.ws.readyState === WebSocket.OPEN) {
-        const audioEvent: TranslatedAudioEvent = {
-          type: 'audio',
-          speakerAttendeeId: speaker.attendeeId,
-          audioData: audioBuffer.toString('base64'),
-          targetLanguage: targetCode,
-        };
-        partner.ws.send(JSON.stringify(audioEvent));
-
-        console.log(
-          `[Timing] Polly ${targetCode}: synthesis=${Date.now() - tPollyStart}ms, ` +
-          `total_pipeline=${Date.now() - t0}ms`
-        );
-      }
-    } catch (err: any) {
-      console.error(`[Polly] Synthesis failed for ${targetCode}:`, err.message);
+    if (audioBuffer && partner.ws.readyState === WebSocket.OPEN) {
+      const audioEvent: TranslatedAudioEvent = {
+        type: 'audio',
+        speakerAttendeeId: speaker.attendeeId,
+        audioData: audioBuffer.toString('base64'),
+        targetLanguage: targetCode,
+      };
+      partner.ws.send(JSON.stringify(audioEvent));
     }
   }
 }

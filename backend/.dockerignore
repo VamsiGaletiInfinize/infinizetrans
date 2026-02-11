@@ -1,0 +1,8 @@
+node_modules
+dist
+cdk.out
+.env
+*.log
+logs/
+test-*.js
+AWSCLIV2.pkg
