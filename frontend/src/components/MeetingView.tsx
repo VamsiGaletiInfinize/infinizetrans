@@ -11,6 +11,7 @@ import { useAudioCapture } from '@/hooks/useAudioCapture';
 import VideoTile from './VideoTile';
 import CaptionsPanel from './CaptionsPanel';
 import Controls from './Controls';
+import CallSummary from './CallSummary';
 
 interface MeetingViewProps {
   meetingInfo: MeetingInfo;
@@ -28,6 +29,7 @@ export default function MeetingView({
   const meetingId = meetingInfo.meeting.MeetingId;
   const attendeeId = meetingInfo.attendee.AttendeeId;
   const [captionsOpen, setCaptionsOpen] = useState(true);
+  const [showSummary, setShowSummary] = useState(false);
 
   const {
     joined,
@@ -67,8 +69,18 @@ export default function MeetingView({
 
   const handleLeave = () => {
     leave();
-    onLeave();
+    setShowSummary(true);
   };
+
+  if (showSummary) {
+    return (
+      <CallSummary
+        captions={captions}
+        attendeeName={attendeeName}
+        onClose={onLeave}
+      />
+    );
+  }
 
   return (
     <div className="flex h-screen flex-col bg-gray-100">
