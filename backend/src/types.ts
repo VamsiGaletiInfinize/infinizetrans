@@ -15,7 +15,11 @@ export interface WsStopMessage {
   action: 'stop';
 }
 
-export type WsClientMessage = WsJoinMessage | WsStopMessage;
+export interface WsMicMessage {
+  action: 'mic_on' | 'mic_off';
+}
+
+export type WsClientMessage = WsJoinMessage | WsStopMessage | WsMicMessage;
 
 /* ------------------------------------------------------------------ */
 /*  WebSocket messages: Server → Client                                */

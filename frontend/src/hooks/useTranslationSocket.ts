@@ -26,6 +26,13 @@ export function useTranslationSocket(
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(pcm);
   }, []);
 
+  const sendControl = useCallback((action: string) => {
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ action }));
+    }
+  }, []);
+
   // Connect / disconnect
   useEffect(() => {
     if (!options) return;
@@ -75,7 +82,7 @@ export function useTranslationSocket(
 
   useEffect(() => () => playerRef.current?.destroy(), []);
 
-  return { captions, connected, sendAudioFrame };
+  return { captions, connected, sendAudioFrame, sendControl };
 }
 
 const MAX_CAPTIONS = 50;

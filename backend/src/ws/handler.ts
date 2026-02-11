@@ -88,6 +88,25 @@ async function handleControlMessage(
       stopTranscription(connectionId);
       break;
     }
+
+    case 'mic_on': {
+      const conn = connectionManager.get(connectionId);
+      if (conn) {
+        logger.info('🎤 Mic ON — starting new Deepgram session', {
+          attendee: conn.info.attendeeName,
+        });
+        startTranscription(connectionId, conn.info);
+      }
+      break;
+    }
+
+    case 'mic_off': {
+      logger.info('🔇 Mic OFF — stopping Deepgram session', {
+        connectionId,
+      });
+      stopTranscription(connectionId);
+      break;
+    }
   }
 }
 
@@ -98,7 +117,23 @@ async function handleControlMessage(
 function handleAudioFrame(connectionId: string, data: Buffer): void {
   if (data.length > MAX_FRAME_BYTES) return;
   const session = transcriptionSessions.get(connectionId);
-  if (session) session.pushAudio(data);
+
+  // Safety net: if audio arrives but no session exists (or Deepgram connection died),
+  // auto-restart so we never miss speech.
+  if (!session || (session instanceof DeepgramTranscriptionSession && !session.isAlive())) {
+    const conn = connectionManager.get(connectionId);
+    if (conn) {
+      logger.info('🔄 Auto-restarting Deepgram session (audio arrived with no active session)', {
+        attendee: conn.info.attendeeName,
+      });
+      startTranscription(connectionId, conn.info);
+      const newSession = transcriptionSessions.get(connectionId);
+      if (newSession) newSession.pushAudio(data);
+    }
+    return;
+  }
+
+  session.pushAudio(data);
 }
 
 /* ------------------------------------------------------------------ */

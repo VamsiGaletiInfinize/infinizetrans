@@ -11,13 +11,13 @@ interface DeepgramConfig {
 
 /**
  * Deepgram transcription service for real-time audio transcription.
- * Uses Nova-2 model for state-of-the-art accuracy (95-98%).
- * Optimized for sub-second latency (<500ms).
+ * Uses Nova-3 model for best accuracy and sub-300ms latency.
  */
 export class DeepgramTranscriptionSession {
   private deepgram: any;
   private connection: any = null;
   private active = true;
+  private connectionOpen = false;
   private onTranscript: TranscriptCallback;
   private languageCode: string;
   private attendeeName: string;
@@ -32,7 +32,7 @@ export class DeepgramTranscriptionSession {
     this.onTranscript = config.onTranscript;
     this.attendeeName = config.attendeeName || 'Unknown';
 
-    logTranscription.modelInfo('Deepgram', 'Nova-2', '2.0');
+    logTranscription.modelInfo('Deepgram', 'Nova-3', '3.0');
     logger.info('🔧 DeepgramTranscriptionSession initialized', {
       language: this.languageCode,
       attendee: this.attendeeName,
@@ -50,12 +50,12 @@ export class DeepgramTranscriptionSession {
 
   async start(): Promise<void> {
     this.startTime = Date.now();
-    logTranscription.start('Deepgram', 'Nova-2', this.languageCode, this.attendeeName);
+    logTranscription.start('Deepgram', 'Nova-3', this.languageCode, this.attendeeName);
 
     try {
       // Create live transcription connection with optimized parameters
       this.connection = this.deepgram.listen.live({
-        model: 'nova-2',
+        model: 'nova-3',
         language: this.languageCode,
         encoding: 'linear16',
         sample_rate: 16000,
@@ -69,13 +69,14 @@ export class DeepgramTranscriptionSession {
       });
 
       logger.info('🎤 Deepgram connection configured', {
-        model: 'nova-2',
+        model: 'nova-3',
         language: this.languageCode,
         target_latency: '<500ms',
       });
 
       // Event: Connection opened
       this.connection.on(LiveTranscriptionEvents.Open, () => {
+        this.connectionOpen = true;
         const connectionLatency = Date.now() - this.startTime;
         logTranscription.latency('connection_open', connectionLatency);
         logger.info('✅ Deepgram WebSocket OPEN', {
@@ -148,6 +149,7 @@ export class DeepgramTranscriptionSession {
 
       // Event: Connection closed
       this.connection.on(LiveTranscriptionEvents.Close, () => {
+        this.connectionOpen = false;
         const totalDuration = Date.now() - this.startTime;
         logger.info('🔌 Deepgram connection CLOSED', {
           totalDurationMs: totalDuration,
@@ -196,6 +198,10 @@ export class DeepgramTranscriptionSession {
         attendee: this.attendeeName,
       });
     }
+  }
+
+  isAlive(): boolean {
+    return this.active && this.connectionOpen;
   }
 
   stop(): void {

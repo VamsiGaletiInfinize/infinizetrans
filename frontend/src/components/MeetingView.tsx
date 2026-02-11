@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { MeetingInfo } from '@/types';
 import { useMeetingSession } from '@/hooks/useMeetingSession';
 import {
@@ -51,7 +51,7 @@ export default function MeetingView({
       }
     : null;
 
-  const { captions, connected, sendAudioFrame } =
+  const { captions, connected, sendAudioFrame, sendControl } =
     useTranslationSocket(socketOpts);
 
   const handleAudioFrame = useCallback(
@@ -60,10 +60,20 @@ export default function MeetingView({
   );
 
   useAudioCapture({
-    enabled: joined && connected,
+    enabled: joined && connected && !muted,
     stream: micStream,
     onAudioFrame: handleAudioFrame,
   });
+
+  // Send mic_on/mic_off to backend when mute state changes
+  const prevMuted = useRef(muted);
+  useEffect(() => {
+    if (!connected) return;
+    if (prevMuted.current !== muted) {
+      sendControl(muted ? 'mic_off' : 'mic_on');
+      prevMuted.current = muted;
+    }
+  }, [muted, connected, sendControl]);
 
   const handleLeave = () => {
     leave();
