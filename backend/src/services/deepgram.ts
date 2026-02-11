@@ -17,7 +17,7 @@ export class DeepgramTranscriptionSession {
   private deepgram: any;
   private connection: any = null;
   private active = true;
-  private connectionOpen = false;
+  private connectionState: 'idle' | 'connecting' | 'open' | 'closed' = 'idle';
   private onTranscript: TranscriptCallback;
   private languageCode: string;
   private attendeeName: string;
@@ -51,6 +51,7 @@ export class DeepgramTranscriptionSession {
 
   async start(): Promise<void> {
     this.startTime = Date.now();
+    this.connectionState = 'connecting';
     logTranscription.start('Deepgram', 'Nova-3', this.languageCode, this.attendeeName);
 
     try {
@@ -77,7 +78,7 @@ export class DeepgramTranscriptionSession {
 
       // Event: Connection opened
       this.connection.on(LiveTranscriptionEvents.Open, () => {
-        this.connectionOpen = true;
+        this.connectionState = 'open';
         const connectionLatency = Date.now() - this.startTime;
         logTranscription.latency('connection_open', connectionLatency);
         logger.info('✅ Deepgram WebSocket OPEN', {
@@ -88,7 +89,7 @@ export class DeepgramTranscriptionSession {
         // Send KeepAlive every 8s to prevent Deepgram from closing
         // the connection during audio gaps (e.g. tab in background)
         this.keepAliveInterval = setInterval(() => {
-          if (this.connection && this.connectionOpen) {
+          if (this.connection && this.connectionState === 'open') {
             try {
               this.connection.keepAlive();
             } catch {
@@ -162,7 +163,7 @@ export class DeepgramTranscriptionSession {
 
       // Event: Connection closed
       this.connection.on(LiveTranscriptionEvents.Close, () => {
-        this.connectionOpen = false;
+        this.connectionState = 'closed';
         if (this.keepAliveInterval) {
           clearInterval(this.keepAliveInterval);
           this.keepAliveInterval = null;
@@ -218,7 +219,41 @@ export class DeepgramTranscriptionSession {
   }
 
   isAlive(): boolean {
-    return this.active && this.connectionOpen;
+    return this.active && (this.connectionState === 'connecting' || this.connectionState === 'open');
+  }
+
+  /**
+   * Gracefully finish: tell Deepgram to finalize buffered audio,
+   * but keep processing transcripts until the connection closes.
+   * Use this for mic_off so the last sentence isn't lost.
+   */
+  finishGracefully(): void {
+    logger.info('🔇 Finishing Deepgram session gracefully (waiting for final transcripts)', {
+      attendee: this.attendeeName,
+    });
+
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
+
+    if (this.connection) {
+      try {
+        this.connection.finish();
+      } catch (err: any) {
+        logger.warn('⚠️ Error finishing Deepgram connection', {
+          error: err.message,
+          attendee: this.attendeeName,
+        });
+      }
+    }
+
+    // Force cleanup after 3s in case Deepgram doesn't close the connection
+    setTimeout(() => {
+      if (this.active) {
+        this.stop();
+      }
+    }, 3000);
   }
 
   stop(): void {
@@ -239,9 +274,6 @@ export class DeepgramTranscriptionSession {
     if (this.connection) {
       try {
         this.connection.finish();
-        logger.info('✅ Deepgram connection finished gracefully', {
-          attendee: this.attendeeName,
-        });
       } catch (err: any) {
         logger.warn('⚠️ Error closing Deepgram connection', {
           error: err.message,

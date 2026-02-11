@@ -15,21 +15,29 @@ interface UseAudioCaptureOptions {
  * Captures mic audio via the Web Audio API, down-samples to 16 kHz mono PCM,
  * and delivers frames to the caller for WebSocket transmission.
  *
- * Uses a small 512-sample buffer (~32ms at 16 kHz) for low latency.
+ * The AudioContext is created once when the stream is available and kept alive
+ * across mute/unmute cycles. Only frame delivery is gated by `enabled`, so
+ * unmuting is instant (no AudioContext startup delay) and Polly playback on the
+ * partner's side is never disrupted by context teardown.
  */
 export function useAudioCapture({
   enabled,
   stream,
   onAudioFrame,
 }: UseAudioCaptureOptions): void {
-  // Keep a stable reference to avoid re-wiring on every render
   const cbRef = useRef(onAudioFrame);
   cbRef.current = onAudioFrame;
 
-  useEffect(() => {
-    if (!enabled || !stream) return;
+  // Track enabled state in a ref so the audio processor callback
+  // can read it without causing effect re-runs.
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
-    // Create context at 16 kHz – the browser resamples from the mic rate
+  // Create AudioContext once when stream is available; tear down only
+  // when the stream itself changes (e.g. leaving the meeting).
+  useEffect(() => {
+    if (!stream) return;
+
     const ctx = new AudioContext({ sampleRate: 16000 });
 
     // Resume AudioContext if browser suspends it (e.g. tab in background)
@@ -39,42 +47,32 @@ export function useAudioCapture({
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
-
-    // Also resume immediately in case it starts suspended
     if (ctx.state === 'suspended') ctx.resume();
 
     const source = ctx.createMediaStreamSource(stream);
-
-    // 512 samples @ 16 kHz ≈ 32 ms per frame (was 2048 = 128ms)
     const processor = ctx.createScriptProcessor(512, 1, 1);
 
-    // Track last frame timestamp to prevent echo/feedback loops
     let lastFrameTime = 0;
-    const MIN_FRAME_INTERVAL_MS = 25; // Minimum 25ms between frames
+    const MIN_FRAME_INTERVAL_MS = 25;
 
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
-      // Prevent audio feedback loop by debouncing rapid frames
+      // Gate on enabled — when muted we simply skip sending frames.
+      // The AudioContext stays alive so unmuting is instant.
+      if (!enabledRef.current) return;
+
       const now = Date.now();
-      if (now - lastFrameTime < MIN_FRAME_INTERVAL_MS) {
-        return; // Skip this frame to prevent echo
-      }
+      if (now - lastFrameTime < MIN_FRAME_INTERVAL_MS) return;
       lastFrameTime = now;
 
       const float32 = e.inputBuffer.getChannelData(0);
 
-      // Detect and filter out silent or very quiet audio (possible echo/noise)
       let sumSquares = 0;
       for (let i = 0; i < float32.length; i++) {
         sumSquares += float32[i] * float32[i];
       }
       const rms = Math.sqrt(sumSquares / float32.length);
+      if (rms < 0.01) return;
 
-      // Skip frames below noise threshold (prevents transcribing silence/echo)
-      if (rms < 0.01) {
-        return;
-      }
-
-      // float32 [-1, 1] → int16 [-32768, 32767]
       const int16 = new Int16Array(float32.length);
       for (let i = 0; i < float32.length; i++) {
         const s = Math.max(-1, Math.min(1, float32[i]));
@@ -86,8 +84,6 @@ export function useAudioCapture({
 
     source.connect(processor);
 
-    // Must connect to destination to keep the processor alive;
-    // route through a zero-gain node to prevent feedback.
     const mute = ctx.createGain();
     mute.gain.value = 0;
     processor.connect(mute);
@@ -100,5 +96,5 @@ export function useAudioCapture({
       mute.disconnect();
       ctx.close();
     };
-  }, [enabled, stream]);
+  }, [stream]); // Only depends on stream, NOT on enabled
 }

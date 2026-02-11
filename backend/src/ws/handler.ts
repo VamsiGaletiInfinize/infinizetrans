@@ -101,10 +101,18 @@ async function handleControlMessage(
     }
 
     case 'mic_off': {
-      logger.info('🔇 Mic OFF — stopping Deepgram session', {
-        connectionId,
-      });
-      stopTranscription(connectionId);
+      const session = transcriptionSessions.get(connectionId);
+      if (session && session instanceof DeepgramTranscriptionSession) {
+        logger.info('🔇 Mic OFF — finishing Deepgram session gracefully', {
+          connectionId,
+        });
+        // Don't kill session immediately — let Deepgram finalize buffered audio
+        session.finishGracefully();
+        transcriptionSessions.delete(connectionId);
+        lastPartialTime.delete(connectionId);
+      } else {
+        stopTranscription(connectionId);
+      }
       break;
     }
   }
