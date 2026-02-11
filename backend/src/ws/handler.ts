@@ -45,12 +45,8 @@ const PRE_SYNTH_THROTTLE_MS = 1000; // At most 1 background Polly call per secon
    synthesize Polly for the current partial so the listener doesn't wait 30+s. */
 const STALE_PARTIAL_MS = 5000;
 const stalePartialTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const interimPollyText = new Map<string, string>(); // normalized text already played
+const interimPollyFired = new Set<string>(); // flag: interim already played, skip next final
 const latestPartialState = new Map<string, { translatedText: string; speaker: ParticipantInfo }>();
-
-function normalizeForComparison(text: string): string {
-  return text.toLowerCase().replace(/[.,!?;:'"()\-]/g, '').replace(/\s+/g, ' ').trim();
-}
 
 /* ------------------------------------------------------------------ */
 /*  Entry point                                                        */
@@ -267,7 +263,7 @@ function cleanupPartialState(connectionId: string): void {
   const timer = stalePartialTimers.get(connectionId);
   if (timer) clearTimeout(timer);
   stalePartialTimers.delete(connectionId);
-  interimPollyText.delete(connectionId);
+  interimPollyFired.delete(connectionId);
   latestPartialState.delete(connectionId);
 }
 
@@ -367,8 +363,9 @@ async function onTranscriptResult(
 
   // --- Stale partial timer: play Polly during long continuous speech ---
   // If no final arrives within 5s, synthesize the current partial so the
-  // listener doesn't wait 30+ seconds. Tracks what was played to avoid repetition.
-  if (!isFinal && partner && translatedText.length > 10) {
+  // listener doesn't wait 30+ seconds. Once fired, don't fire again until
+  // the next final resets things (prevents multiple interim plays).
+  if (!isFinal && partner && translatedText.length > 10 && !interimPollyFired.has(connectionId)) {
     // Save latest state so the timer callback can access it
     latestPartialState.set(connectionId, { translatedText, speaker });
 
@@ -381,12 +378,12 @@ async function onTranscriptResult(
       const p = connectionManager.getPartner(speaker.meetingId, connectionId);
       if (!state || !p || p.ws.readyState !== WebSocket.OPEN) return;
 
+      // Mark as fired — no more interims until the next final
+      interimPollyFired.add(connectionId);
+
       try {
         const audioBuffer = await synthesizeSpeech(state.translatedText, p.info.spokenLanguage);
         if (audioBuffer && p.ws.readyState === WebSocket.OPEN) {
-          // Save what we played so we can skip it when the final arrives
-          interimPollyText.set(connectionId, normalizeForComparison(state.translatedText));
-
           const audioEvent: TranslatedAudioEvent = {
             type: 'audio',
             speakerAttendeeId: state.speaker.attendeeId,
@@ -413,13 +410,9 @@ async function onTranscriptResult(
     stalePartialTimers.delete(connectionId);
     latestPartialState.delete(connectionId);
 
-    // Check if interim Polly already played similar text (avoid repetition)
-    const interimPlayed = interimPollyText.get(connectionId);
-    interimPollyText.delete(connectionId);
-
-    const normalizedFinal = normalizeForComparison(translatedText);
-    if (interimPlayed && normalizedFinal.startsWith(interimPlayed)) {
-      // Already played via interim — skip to avoid repetition
+    // If interim Polly already played for this utterance, skip final to avoid repetition
+    if (interimPollyFired.has(connectionId)) {
+      interimPollyFired.delete(connectionId);
       console.log(
         `[Timing] ${speaker.attendeeName} (${srcLang}) → ${partner.info.attendeeName} (${targetCode}): ` +
         `SKIPPED final polly (already played via interim)`
