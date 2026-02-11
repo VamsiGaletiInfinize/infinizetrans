@@ -3,12 +3,14 @@ import { IncomingMessage } from 'http';
 import { connectionManager } from './connectionManager';
 import { TranscriptionSession, TranscriptResult } from '../services/transcribe';
 import { DeepgramTranscriptionSession } from '../services/deepgram';
+import { NovaSonicSession } from '../services/novaSonic';
 import { pivotTranslate } from '../services/translate';
 import { synthesizeSpeech } from '../services/polly';
 import {
   transcribeToTranslateCode,
   getTranslateCode,
   getTranscribeCode,
+  getNovaSonicVoice,
 } from '../utils/languages';
 import {
   WsClientMessage,
@@ -23,29 +25,26 @@ import { logger, logTranscription } from '../utils/logger';
 /*  State per connection                                               */
 /* ------------------------------------------------------------------ */
 
-const transcriptionSessions = new Map<string, TranscriptionSession | DeepgramTranscriptionSession>();
+type SessionType = TranscriptionSession | DeepgramTranscriptionSession | NovaSonicSession;
+const transcriptionSessions = new Map<string, SessionType>();
 const PARTIAL_THROTTLE_MS = 100;
 const lastPartialTime = new Map<string, number>();
 const MAX_FRAME_BYTES = 65_536;
 
-/* Translation cache: reuse partial translations on finals to skip redundant API calls */
+/* Legacy pipeline state (only used when pipeline.provider === 'legacy') */
 const partialTranslationCache = new Map<string, { originalText: string; translatedText: string }>();
 
-/* Polly pre-synthesis: start Polly in background during partials so audio is
-   ready instantly when the final arrives. Throttled to 1 call/second max. */
 interface PreSynthEntry {
   translatedText: string;
   audioPromise: Promise<Buffer | null>;
 }
 const preSynthCache = new Map<string, PreSynthEntry>();
 const lastPreSynthTime = new Map<string, number>();
-const PRE_SYNTH_THROTTLE_MS = 1000; // At most 1 background Polly call per second
+const PRE_SYNTH_THROTTLE_MS = 1000;
 
-/* Stale partial timer: if no final arrives within 5s of continuous speech,
-   synthesize Polly for the current partial so the listener doesn't wait 30+s. */
 const STALE_PARTIAL_MS = 5000;
 const stalePartialTimers = new Map<string, ReturnType<typeof setTimeout>>();
-const interimPollyFired = new Set<string>(); // flag: interim already played, skip next final
+const interimPollyFired = new Set<string>();
 const latestPartialState = new Map<string, { translatedText: string; speaker: ParticipantInfo }>();
 
 /* ------------------------------------------------------------------ */
@@ -112,7 +111,7 @@ async function handleControlMessage(
     case 'mic_on': {
       const conn = connectionManager.get(connectionId);
       if (conn) {
-        logger.info('🎤 Mic ON — starting new Deepgram session', {
+        logger.info('🎤 Mic ON — starting session', {
           attendee: conn.info.attendeeName,
         });
         startTranscription(connectionId, conn.info);
@@ -122,15 +121,15 @@ async function handleControlMessage(
 
     case 'mic_off': {
       const session = transcriptionSessions.get(connectionId);
-      if (session && session instanceof DeepgramTranscriptionSession) {
-        logger.info('🔇 Mic OFF — finishing Deepgram session gracefully', {
-          connectionId,
-        });
-        // Don't kill session immediately — let Deepgram finalize buffered audio
+      if (session instanceof NovaSonicSession) {
+        logger.info('🔇 Mic OFF — finishing Nova Sonic session gracefully', { connectionId });
+        session.finishGracefully();
+        transcriptionSessions.delete(connectionId);
+      } else if (session instanceof DeepgramTranscriptionSession) {
+        logger.info('🔇 Mic OFF — finishing Deepgram session gracefully', { connectionId });
         session.finishGracefully();
         transcriptionSessions.delete(connectionId);
         lastPartialTime.delete(connectionId);
-        // Clean up stale partial timer (the finishGracefully final will handle Polly)
         cleanupPartialState(connectionId);
       } else {
         stopTranscription(connectionId);
@@ -141,19 +140,22 @@ async function handleControlMessage(
 }
 
 /* ------------------------------------------------------------------ */
-/*  Audio frames → Transcribe                                          */
+/*  Audio frames → Session                                             */
 /* ------------------------------------------------------------------ */
 
 function handleAudioFrame(connectionId: string, data: Buffer): void {
   if (data.length > MAX_FRAME_BYTES) return;
   const session = transcriptionSessions.get(connectionId);
 
-  // Safety net: if audio arrives but no session exists (or Deepgram connection died),
-  // auto-restart so we never miss speech.
-  if (!session || (session instanceof DeepgramTranscriptionSession && !session.isAlive())) {
+  // Auto-restart if session died
+  const needsRestart = !session
+    || (session instanceof DeepgramTranscriptionSession && !session.isAlive())
+    || (session instanceof NovaSonicSession && !session.isAlive());
+
+  if (needsRestart) {
     const conn = connectionManager.get(connectionId);
     if (conn) {
-      logger.info('🔄 Auto-restarting Deepgram session (audio arrived with no active session)', {
+      logger.info('🔄 Auto-restarting session (audio arrived with no active session)', {
         attendee: conn.info.attendeeName,
       });
       startTranscription(connectionId, conn.info);
@@ -163,16 +165,119 @@ function handleAudioFrame(connectionId: string, data: Buffer): void {
     return;
   }
 
-  session.pushAudio(data);
+  session!.pushAudio(data);
 }
 
 /* ------------------------------------------------------------------ */
-/*  Transcription lifecycle (fixed language)                           */
+/*  Session lifecycle                                                  */
 /* ------------------------------------------------------------------ */
 
 function startTranscription(connectionId: string, info: ParticipantInfo): void {
   stopTranscription(connectionId);
 
+  // Determine target language from partner or speaker's declared target
+  const partner = connectionManager.getPartner(info.meetingId, connectionId);
+  const targetLang = partner?.info.spokenLanguage || info.targetLanguage;
+
+  // Check if Nova Sonic is enabled and supports both languages
+  const useNovaSonic = config.pipeline.provider === 'nova-sonic'
+    && getNovaSonicVoice(targetLang) !== null;
+
+  if (useNovaSonic) {
+    startNovaSonicSession(connectionId, info, targetLang);
+  } else {
+    startLegacySession(connectionId, info);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Nova Sonic pipeline (speech-to-speech)                             */
+/* ------------------------------------------------------------------ */
+
+function startNovaSonicSession(
+  connectionId: string,
+  info: ParticipantInfo,
+  targetLanguage: string,
+): void {
+  const voiceId = getNovaSonicVoice(targetLanguage)!;
+
+  logger.info('🚀 Starting Nova Sonic session', {
+    attendee: info.attendeeName,
+    source: info.spokenLanguage,
+    target: targetLanguage,
+    voice: voiceId,
+    model: config.novaSonic.modelId,
+  });
+
+  const session = new NovaSonicSession({
+    region: config.novaSonic.region,
+    modelId: config.novaSonic.modelId,
+    sourceLanguage: info.spokenLanguage,
+    targetLanguage,
+    voiceId,
+    attendeeName: info.attendeeName,
+
+    onCaption: (originalText, translatedText, isFinal) => {
+      const p = connectionManager.getPartner(info.meetingId, connectionId);
+      if (!p || p.ws.readyState !== WebSocket.OPEN) return;
+
+      const caption: CaptionEvent = {
+        type: 'caption',
+        speakerAttendeeId: info.attendeeId,
+        speakerName: info.attendeeName,
+        originalText,
+        translatedText,
+        isFinal,
+        detectedLanguage: info.spokenLanguage,
+        targetLanguage,
+      };
+      p.ws.send(JSON.stringify(caption));
+    },
+
+    onAudioComplete: (wavBuffer) => {
+      const p = connectionManager.getPartner(info.meetingId, connectionId);
+      if (!p || p.ws.readyState !== WebSocket.OPEN) return;
+
+      const audioEvent: TranslatedAudioEvent = {
+        type: 'audio',
+        speakerAttendeeId: info.attendeeId,
+        audioData: wavBuffer.toString('base64'),
+        targetLanguage,
+      };
+      p.ws.send(JSON.stringify(audioEvent));
+
+      logger.info(`[Timing] ${info.attendeeName} (${info.spokenLanguage}) → ${p.info.attendeeName} (${targetLanguage}): Nova Sonic audio sent`);
+    },
+
+    onError: (error) => {
+      logger.error('[NovaSonic] Session error, falling back to legacy pipeline', {
+        error: error.message,
+        attendee: info.attendeeName,
+      });
+      // Fall back to legacy pipeline
+      transcriptionSessions.delete(connectionId);
+      startLegacySession(connectionId, info);
+    },
+  });
+
+  transcriptionSessions.set(connectionId, session);
+  session.start().catch((err) => {
+    logger.error('❌ Nova Sonic session failed to start', {
+      connectionId,
+      attendee: info.attendeeName,
+      error: err.message,
+    });
+    // Fall back to legacy pipeline
+    transcriptionSessions.delete(connectionId);
+    startLegacySession(connectionId, info);
+  });
+}
+
+/* ------------------------------------------------------------------ */
+/*  Legacy pipeline (Deepgram + Translate + Polly)                     */
+/* ------------------------------------------------------------------ */
+
+function startLegacySession(connectionId: string, info: ParticipantInfo): void {
   const transcribeCode = getTranscribeCode(info.spokenLanguage);
   if (!transcribeCode) {
     console.error(`[Transcribe] No transcribe code for ${info.spokenLanguage}`);
@@ -182,13 +287,10 @@ function startTranscription(connectionId: string, info: ParticipantInfo): void {
   const useDeepgram = config.deepgram.provider === 'deepgram' && config.deepgram.apiKey;
 
   if (useDeepgram) {
-    // Use Deepgram for superior accuracy (95-98%) and sub-second latency
-    logger.info('🚀 Starting Deepgram transcription', {
+    logger.info('🚀 Starting Deepgram transcription (legacy)', {
       attendee: info.attendeeName,
       language: transcribeCode,
       meetingId: info.meetingId,
-      provider: 'Deepgram Nova-3',
-      targetLatency: '<500ms',
     });
 
     const session = new DeepgramTranscriptionSession({
@@ -207,23 +309,12 @@ function startTranscription(connectionId: string, info: ParticipantInfo): void {
         connectionId,
         attendee: info.attendeeName,
         error: err.message,
-        stack: err.stack,
       });
     });
-
-    logger.info('✅ Deepgram Nova-3 session started', {
-      attendee: info.attendeeName,
-      language: transcribeCode,
-      accuracy: '95-98%',
-      latency: '<500ms',
-    });
   } else {
-    // Use AWS Transcribe (fallback)
-    logger.info('🚀 Starting AWS Transcribe', {
+    logger.info('🚀 Starting AWS Transcribe (legacy)', {
       attendee: info.attendeeName,
       language: transcribeCode,
-      meetingId: info.meetingId,
-      provider: 'AWS Transcribe',
     });
 
     const session = new TranscriptionSession(transcribeCode, (result) => {
@@ -237,11 +328,6 @@ function startTranscription(connectionId: string, info: ParticipantInfo): void {
         attendee: info.attendeeName,
         error: err.message,
       });
-    });
-
-    logger.info('✅ AWS Transcribe session started', {
-      attendee: info.attendeeName,
-      language: transcribeCode,
     });
   }
 }
@@ -268,7 +354,7 @@ function cleanupPartialState(connectionId: string): void {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Speech transcript → Translate → Caption + TTS to partner           */
+/*  Legacy: Speech transcript → Translate → Caption + TTS to partner   */
 /* ------------------------------------------------------------------ */
 
 async function onTranscriptResult(
@@ -279,10 +365,8 @@ async function onTranscriptResult(
   const t0 = Date.now();
   const { text, isFinal, detectedLanguage, startTimeMs, endTimeMs } = result;
 
-  // Source language (Translate code, e.g. 'en', 'hi')
   const srcLang = transcribeToTranslateCode(detectedLanguage);
 
-  // Throttle partials
   if (!isFinal) {
     const now = Date.now();
     const last = lastPartialTime.get(connectionId) ?? 0;
@@ -290,16 +374,12 @@ async function onTranscriptResult(
     lastPartialTime.set(connectionId, now);
   }
 
-  // Find the other participant in this 2-person call
   const partner = connectionManager.getPartner(speaker.meetingId, connectionId);
 
-  // Target language: partner's spoken language (translate code)
-  // Falls back to speaker's declared target if partner hasn't joined yet
   const targetCode = partner
     ? getTranslateCode(partner.info.spokenLanguage)
     : getTranslateCode(speaker.targetLanguage);
 
-  // Translate — reuse cached partial translation on finals when text matches
   let translatedText = text;
   let usedCache = false;
   if (srcLang !== targetCode) {
@@ -317,7 +397,6 @@ async function onTranscriptResult(
       }
     }
 
-    // Cache partial translations for reuse on finals
     if (!isFinal) {
       partialTranslationCache.set(connectionId, { originalText: text, translatedText });
     } else {
@@ -327,7 +406,6 @@ async function onTranscriptResult(
 
   const tTranslated = Date.now();
 
-  // Build caption event
   const caption: CaptionEvent = {
     type: 'caption',
     speakerAttendeeId: speaker.attendeeId,
@@ -341,14 +419,10 @@ async function onTranscriptResult(
     endTimeMs,
   };
 
-  // Send caption to partner
   if (partner && partner.ws.readyState === WebSocket.OPEN) {
     partner.ws.send(JSON.stringify(caption));
   }
 
-  // --- Background Polly pre-synthesis ---
-  // Start Polly in the background during partials so the audio is ready
-  // instantly when the final arrives. Throttled to 1 call/sec to limit cost.
   if (!isFinal && partner && translatedText.length > 10) {
     const now = Date.now();
     const lastTime = lastPreSynthTime.get(connectionId) ?? 0;
@@ -361,15 +435,9 @@ async function onTranscriptResult(
     }
   }
 
-  // --- Stale partial timer: play Polly during long continuous speech ---
-  // If no final arrives within 5s, synthesize the current partial so the
-  // listener doesn't wait 30+ seconds. Once fired, don't fire again until
-  // the next final resets things (prevents multiple interim plays).
   if (!isFinal && partner && translatedText.length > 10 && !interimPollyFired.has(connectionId)) {
-    // Save latest state so the timer callback can access it
     latestPartialState.set(connectionId, { translatedText, speaker });
 
-    // Reset the timer on each partial (debounce)
     const existingTimer = stalePartialTimers.get(connectionId);
     if (existingTimer) clearTimeout(existingTimer);
 
@@ -378,7 +446,6 @@ async function onTranscriptResult(
       const p = connectionManager.getPartner(speaker.meetingId, connectionId);
       if (!state || !p || p.ws.readyState !== WebSocket.OPEN) return;
 
-      // Mark as fired — no more interims until the next final
       interimPollyFired.add(connectionId);
 
       try {
@@ -402,15 +469,12 @@ async function onTranscriptResult(
     }, STALE_PARTIAL_MS));
   }
 
-  // --- Final transcript: synthesize TTS and send audio to partner ---
   if (isFinal && partner && partner.ws.readyState === WebSocket.OPEN) {
-    // Cancel any pending stale partial timer
     const pendingTimer = stalePartialTimers.get(connectionId);
     if (pendingTimer) clearTimeout(pendingTimer);
     stalePartialTimers.delete(connectionId);
     latestPartialState.delete(connectionId);
 
-    // If interim Polly already played for this utterance, skip final to avoid repetition
     if (interimPollyFired.has(connectionId)) {
       interimPollyFired.delete(connectionId);
       console.log(
@@ -424,7 +488,6 @@ async function onTranscriptResult(
 
     const tPollyStart = Date.now();
 
-    // Check if we have pre-synthesized audio that matches
     const cached = preSynthCache.get(connectionId);
     preSynthCache.delete(connectionId);
     lastPreSynthTime.delete(connectionId);
@@ -433,12 +496,10 @@ async function onTranscriptResult(
     let usedPreSynth = false;
 
     if (cached && cached.translatedText === translatedText) {
-      // Cache hit — Polly was already running in the background
       audioBuffer = await cached.audioPromise;
       usedPreSynth = !!audioBuffer;
     }
 
-    // Fresh synthesis if no cache hit or pre-synth returned null
     if (!audioBuffer) {
       try {
         audioBuffer = await synthesizeSpeech(translatedText, partner.info.spokenLanguage);

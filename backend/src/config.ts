@@ -16,4 +16,12 @@ export const config = {
     apiKey: process.env.DEEPGRAM_API_KEY || '',
     provider: process.env.TRANSCRIPTION_PROVIDER || 'deepgram', // 'deepgram' or 'aws'
   },
+  novaSonic: {
+    modelId: process.env.NOVA_SONIC_MODEL_ID || 'amazon.nova-sonic-v1:0',
+    region: process.env.NOVA_SONIC_REGION || process.env.AWS_REGION || 'us-east-1',
+  },
+  pipeline: {
+    // 'nova-sonic' or 'legacy' (Deepgram+Translate+Polly)
+    provider: process.env.TRANSLATION_PIPELINE || 'nova-sonic',
+  },
 };

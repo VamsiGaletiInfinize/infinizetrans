@@ -11,6 +11,7 @@
     "cdk:destroy": "npx cdk destroy --all --force"
   },
   "dependencies": {
+    "@aws-sdk/client-bedrock-runtime": "^3.987.0",
     "@aws-sdk/client-chime-sdk-meetings": "^3.650.0",
     "@aws-sdk/client-dynamodb": "^3.650.0",
     "@aws-sdk/client-polly": "^3.650.0",
@@ -18,6 +19,7 @@
     "@aws-sdk/client-translate": "^3.650.0",
     "@aws-sdk/lib-dynamodb": "^3.650.0",
     "@deepgram/sdk": "^4.11.3",
+    "@smithy/node-http-handler": "^4.4.10",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",

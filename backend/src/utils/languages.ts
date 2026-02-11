@@ -13,6 +13,7 @@ export interface LanguageConfig {
   translateCode: string;
   pollyVoiceId: string;
   pollyEngine: 'neural' | 'standard';
+  novaSonicVoiceId?: string; // Nova Sonic voice (undefined = not supported)
   label: string;
 }
 
@@ -20,29 +21,29 @@ export const PIVOT_LANGUAGE = 'en';
 
 export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
   // English variants
-  { code: 'en-US', transcribeCode: 'en-US', translateCode: 'en',    pollyVoiceId: 'Matthew', pollyEngine: 'neural', label: 'English (US)' },
-  { code: 'en-GB', transcribeCode: 'en-GB', translateCode: 'en',    pollyVoiceId: 'Brian',   pollyEngine: 'neural', label: 'English (UK)' },
-  { code: 'en-AU', transcribeCode: 'en-AU', translateCode: 'en',    pollyVoiceId: 'Nicole',  pollyEngine: 'neural', label: 'English (Australia)' },
-  { code: 'en-IN', transcribeCode: 'en-IN', translateCode: 'en',    pollyVoiceId: 'Aditi',   pollyEngine: 'neural', label: 'English (India)' },
+  { code: 'en-US', transcribeCode: 'en-US', translateCode: 'en',    pollyVoiceId: 'Matthew', pollyEngine: 'neural', novaSonicVoiceId: 'matthew', label: 'English (US)' },
+  { code: 'en-GB', transcribeCode: 'en-GB', translateCode: 'en',    pollyVoiceId: 'Brian',   pollyEngine: 'neural', novaSonicVoiceId: 'amy',     label: 'English (UK)' },
+  { code: 'en-AU', transcribeCode: 'en-AU', translateCode: 'en',    pollyVoiceId: 'Nicole',  pollyEngine: 'neural', novaSonicVoiceId: 'olivia',  label: 'English (Australia)' },
+  { code: 'en-IN', transcribeCode: 'en-IN', translateCode: 'en',    pollyVoiceId: 'Aditi',   pollyEngine: 'neural', novaSonicVoiceId: 'arjun',   label: 'English (India)' },
 
   // Spanish variants
-  { code: 'es-ES', transcribeCode: 'es',    translateCode: 'es',    pollyVoiceId: 'Lucia',   pollyEngine: 'neural', label: 'Spanish (Spain)' },
-  { code: 'es-US', transcribeCode: 'es',    translateCode: 'es',    pollyVoiceId: 'Lupe',    pollyEngine: 'neural', label: 'Spanish (US)' },
-  { code: 'es-MX', transcribeCode: 'es',    translateCode: 'es',    pollyVoiceId: 'Mia',     pollyEngine: 'neural', label: 'Spanish (Mexico)' },
+  { code: 'es-ES', transcribeCode: 'es',    translateCode: 'es',    pollyVoiceId: 'Lucia',   pollyEngine: 'neural', novaSonicVoiceId: 'carlos',  label: 'Spanish (Spain)' },
+  { code: 'es-US', transcribeCode: 'es',    translateCode: 'es',    pollyVoiceId: 'Lupe',    pollyEngine: 'neural', novaSonicVoiceId: 'carlos',  label: 'Spanish (US)' },
+  { code: 'es-MX', transcribeCode: 'es',    translateCode: 'es',    pollyVoiceId: 'Mia',     pollyEngine: 'neural', novaSonicVoiceId: 'carlos',  label: 'Spanish (Mexico)' },
 
   // French variants
-  { code: 'fr-FR', transcribeCode: 'fr',    translateCode: 'fr',    pollyVoiceId: 'Lea',     pollyEngine: 'neural', label: 'French (France)' },
-  { code: 'fr-CA', transcribeCode: 'fr-CA', translateCode: 'fr',    pollyVoiceId: 'Chantal', pollyEngine: 'neural', label: 'French (Canada)' },
+  { code: 'fr-FR', transcribeCode: 'fr',    translateCode: 'fr',    pollyVoiceId: 'Lea',     pollyEngine: 'neural', novaSonicVoiceId: 'florian', label: 'French (France)' },
+  { code: 'fr-CA', transcribeCode: 'fr-CA', translateCode: 'fr',    pollyVoiceId: 'Chantal', pollyEngine: 'neural', novaSonicVoiceId: 'florian', label: 'French (Canada)' },
 
   // German
-  { code: 'de-DE', transcribeCode: 'de',    translateCode: 'de',    pollyVoiceId: 'Vicki',   pollyEngine: 'neural', label: 'German' },
+  { code: 'de-DE', transcribeCode: 'de',    translateCode: 'de',    pollyVoiceId: 'Vicki',   pollyEngine: 'neural', novaSonicVoiceId: 'lennart', label: 'German' },
 
   // Italian
-  { code: 'it-IT', transcribeCode: 'it',    translateCode: 'it',    pollyVoiceId: 'Bianca',  pollyEngine: 'neural', label: 'Italian' },
+  { code: 'it-IT', transcribeCode: 'it',    translateCode: 'it',    pollyVoiceId: 'Bianca',  pollyEngine: 'neural', novaSonicVoiceId: 'lorenzo', label: 'Italian' },
 
   // Portuguese variants
-  { code: 'pt-BR', transcribeCode: 'pt-BR', translateCode: 'pt',    pollyVoiceId: 'Camila',  pollyEngine: 'neural', label: 'Portuguese (Brazil)' },
-  { code: 'pt-PT', transcribeCode: 'pt',    translateCode: 'pt',    pollyVoiceId: 'Ines',    pollyEngine: 'neural', label: 'Portuguese (Portugal)' },
+  { code: 'pt-BR', transcribeCode: 'pt-BR', translateCode: 'pt',    pollyVoiceId: 'Camila',  pollyEngine: 'neural', novaSonicVoiceId: 'leo',     label: 'Portuguese (Brazil)' },
+  { code: 'pt-PT', transcribeCode: 'pt',    translateCode: 'pt',    pollyVoiceId: 'Ines',    pollyEngine: 'neural', novaSonicVoiceId: 'leo',     label: 'Portuguese (Portugal)' },
 
   // Dutch
   { code: 'nl-NL', transcribeCode: 'nl',    translateCode: 'nl',    pollyVoiceId: 'Lotte',   pollyEngine: 'neural', label: 'Dutch' },
@@ -61,7 +62,7 @@ export const SUPPORTED_LANGUAGES: LanguageConfig[] = [
   { code: 'zh-TW', transcribeCode: 'zh-TW', translateCode: 'zh-TW', pollyVoiceId: 'Zhiyu',   pollyEngine: 'neural', label: 'Chinese (Traditional)' },
   { code: 'ja-JP', transcribeCode: 'ja',    translateCode: 'ja',    pollyVoiceId: 'Kazuha',  pollyEngine: 'neural', label: 'Japanese' },
   { code: 'ko-KR', transcribeCode: 'ko',    translateCode: 'ko',    pollyVoiceId: 'Seoyeon', pollyEngine: 'neural', label: 'Korean' },
-  { code: 'hi-IN', transcribeCode: 'hi',    translateCode: 'hi',    pollyVoiceId: 'Kajal',   pollyEngine: 'neural', label: 'Hindi' },
+  { code: 'hi-IN', transcribeCode: 'hi',    translateCode: 'hi',    pollyVoiceId: 'Kajal',   pollyEngine: 'neural', novaSonicVoiceId: 'arjun', label: 'Hindi' },
   { code: 'th-TH', transcribeCode: 'th',    translateCode: 'th',    pollyVoiceId: 'Takumi',  pollyEngine: 'standard', label: 'Thai' },
   { code: 'id-ID', transcribeCode: 'id',    translateCode: 'id',    pollyVoiceId: 'Takumi',  pollyEngine: 'standard', label: 'Indonesian' },
   { code: 'vi-VN', transcribeCode: 'vi',    translateCode: 'vi',    pollyVoiceId: 'Takumi',  pollyEngine: 'standard', label: 'Vietnamese' },
@@ -109,4 +110,9 @@ export function getPollyConfig(
   const cfg = getLanguageConfig(languageCode);
   if (!cfg?.pollyVoiceId || !cfg.pollyEngine) return null;
   return { voiceId: cfg.pollyVoiceId, engine: cfg.pollyEngine };
+}
+
+export function getNovaSonicVoice(languageCode: string): string | null {
+  const cfg = getLanguageConfig(languageCode);
+  return cfg?.novaSonicVoiceId || null;
 }
