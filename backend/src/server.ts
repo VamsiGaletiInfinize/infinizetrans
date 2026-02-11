@@ -8,11 +8,26 @@ import { handleWebSocketConnection } from './ws/handler';
 
 const app = express();
 
+const allowedOrigins = config.server.corsOrigin
+  .split(',')
+  .map((o) => o.trim());
+
 app.use(
   cors({
-    origin: config.server.corsOrigin,
+    origin: (origin, callback) => {
+      // Allow requests with no origin (curl, server-to-server)
+      if (!origin) return callback(null, true);
+      if (
+        allowedOrigins.some((allowed) => origin === allowed) ||
+        origin.endsWith('.ngrok-free.dev') ||
+        origin.endsWith('.amplifyapp.com')
+      ) {
+        return callback(null, true);
+      }
+      callback(new Error(`CORS: ${origin} not allowed`));
+    },
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'ngrok-skip-browser-warning'],
   }),
 );
 app.use(express.json());

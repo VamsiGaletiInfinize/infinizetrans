@@ -8,7 +8,7 @@ export async function createMeeting(
 ): Promise<MeetingInfo> {
   const res = await fetch(`${BACKEND_URL}/api/meetings`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
     body: JSON.stringify({ attendeeName }),
   });
   if (!res.ok) {
@@ -26,7 +26,7 @@ export async function joinMeeting(
     `${BACKEND_URL}/api/meetings/${meetingId}/attendees`,
     {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'ngrok-skip-browser-warning': 'true' },
       body: JSON.stringify({ attendeeName }),
     },
   );
