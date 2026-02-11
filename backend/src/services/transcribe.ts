@@ -5,7 +5,10 @@ import {
 } from '@aws-sdk/client-transcribe-streaming';
 import { config } from '../config';
 
-const client = new TranscribeStreamingClient({ region: config.aws.region });
+/** Create a fresh client per streaming session to ensure credentials are current */
+function createClient() {
+  return new TranscribeStreamingClient({ region: config.aws.region });
+}
 
 export interface TranscriptResult {
   text: string;
@@ -94,6 +97,7 @@ export class TranscriptionSession {
       }
 
       try {
+        const client = createClient();
         const response = await client.send(
           new StartStreamTranscriptionCommand({
             LanguageCode: this.languageCode as any,
@@ -134,11 +138,12 @@ export class TranscriptionSession {
       } catch (err: any) {
         if (!this.active) return;
 
-        const errMsg = err?.message || err?.name || String(err);
+        const errMsg = err?.message || err?.name || JSON.stringify(err, Object.getOwnPropertyNames(err));
         this.restartCount++;
         console.error(
           `[Transcribe] Session error (attempt ${this.restartCount}/${TranscriptionSession.MAX_RESTARTS}): ${errMsg}`,
         );
+        if (err?.$metadata) console.error('[Transcribe] metadata:', JSON.stringify(err.$metadata));
 
         if (this.restartCount > TranscriptionSession.MAX_RESTARTS) {
           console.error('[Transcribe] Max restarts reached, giving up.');
