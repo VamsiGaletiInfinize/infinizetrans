@@ -38,27 +38,33 @@ interface IncrementalTtsState {
   spokenLength: number;
   /** Pending TTS promise chain — ensures audio chunks are sent in order. */
   ttsChain: Promise<void>;
+  /** Timestamp of last TTS chunk enqueued — for time-based forcing. */
+  lastTtsTime: number;
 }
 
 const incrementalTtsState = new Map<string, IncrementalTtsState>();
 
 /** Sentence-ending punctuation across supported languages. */
 const SENTENCE_END_RE = /[.!?。！？]\s*/g;
+/** Clause-level boundaries (commas, semicolons, colons, dashes followed by space). */
+const CLAUSE_END_RE = /[,;:–—]\s+/g;
 /** Minimum characters before we trigger incremental TTS (avoids tiny fragments). */
-const MIN_TTS_CHARS = 15;
-/** Force a TTS chunk if no sentence boundary found after this many new characters. */
-const FORCE_TTS_CHARS = 80;
+const MIN_TTS_CHARS = 5;
+/** Force a TTS chunk at a word boundary after this many new characters. */
+const FORCE_TTS_CHARS = 25;
+/** Force TTS if this many ms have elapsed since the last chunk, even with fewer chars. */
+const FORCE_TTS_INTERVAL_MS = 1500;
 
 /**
  * Find the position just after the last sentence-ending punctuation
  * in `text` that occurs at or after `afterPos`.
  * Returns -1 if no boundary found.
  */
-function findLastSentenceEnd(text: string, afterPos: number): number {
-  SENTENCE_END_RE.lastIndex = afterPos;
+function findLastBoundary(text: string, afterPos: number, regex: RegExp): number {
+  regex.lastIndex = afterPos;
   let lastEnd = -1;
   let m;
-  while ((m = SENTENCE_END_RE.exec(text)) !== null) {
+  while ((m = regex.exec(text)) !== null) {
     lastEnd = m.index + m[0].length;
   }
   return lastEnd;
@@ -316,19 +322,32 @@ function enqueueIncrementalTts(
 
   let state = incrementalTtsState.get(connectionId);
   if (!state) {
-    state = { spokenLength: 0, ttsChain: Promise.resolve() };
+    state = { spokenLength: 0, ttsChain: Promise.resolve(), lastTtsTime: Date.now() };
     incrementalTtsState.set(connectionId, state);
   }
 
   const newText = originalText.substring(state.spokenLength);
   if (newText.length < MIN_TTS_CHARS) return;
 
-  // Look for a sentence boundary after the already-spoken position
-  let chunkEnd = findLastSentenceEnd(originalText, state.spokenLength);
+  const now = Date.now();
+  const elapsed = now - state.lastTtsTime;
 
-  // Fallback: if no sentence boundary but accumulated text is very long,
-  // split at the last word boundary to avoid holding too much un-spoken text.
+  // 1. Best: sentence boundary (.!?)
+  let chunkEnd = findLastBoundary(originalText, state.spokenLength, SENTENCE_END_RE);
+
+  // 2. Good: clause boundary (,;:—) if enough text accumulated
+  if (chunkEnd <= state.spokenLength && newText.length >= 10) {
+    chunkEnd = findLastBoundary(originalText, state.spokenLength, CLAUSE_END_RE);
+  }
+
+  // 3. Fallback: force at word boundary if text is long enough
   if (chunkEnd <= state.spokenLength && newText.length > FORCE_TTS_CHARS) {
+    const wordBoundary = findLastWordBoundary(newText);
+    chunkEnd = state.spokenLength + wordBoundary;
+  }
+
+  // 4. Time-based: if enough time elapsed, force at word boundary even with less text
+  if (chunkEnd <= state.spokenLength && elapsed >= FORCE_TTS_INTERVAL_MS && newText.length >= 8) {
     const wordBoundary = findLastWordBoundary(newText);
     chunkEnd = state.spokenLength + wordBoundary;
   }
@@ -338,8 +357,9 @@ function enqueueIncrementalTts(
   const chunk = originalText.substring(state.spokenLength, chunkEnd).trim();
   if (chunk.length < MIN_TTS_CHARS) return;
 
-  // Update spoken length immediately so the next partial doesn't re-process
+  // Update state immediately so the next partial doesn't re-process
   state.spokenLength = chunkEnd;
+  state.lastTtsTime = now;
 
   // Chain the TTS work to preserve audio ordering
   state.ttsChain = state.ttsChain.then(async () => {
@@ -367,7 +387,7 @@ function enqueueIncrementalTts(
         partner.ws.send(JSON.stringify(audioEvent));
 
         console.log(
-          `[IncrementalTTS] ${speaker.attendeeName}: "${chunk.substring(0, 50)}${chunk.length > 50 ? '...' : ''}" → ${targetCode}`
+          `[IncrementalTTS] ${speaker.attendeeName}: "${chunk.substring(0, 50)}${chunk.length > 50 ? '...' : ''}" → ${targetCode} (${chunk.length}ch)`
         );
       }
     } catch (err: any) {
