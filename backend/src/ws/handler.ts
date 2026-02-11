@@ -41,9 +41,9 @@ const preSynthCache = new Map<string, PreSynthEntry>();
 const lastPreSynthTime = new Map<string, number>();
 const PRE_SYNTH_THROTTLE_MS = 1000; // At most 1 background Polly call per second
 
-/* Stale partial timer: if no final arrives within 5s of continuous speech,
+/* Stale partial timer: if no final arrives within 3s of continuous speech,
    synthesize Polly for the current partial so the listener doesn't wait 30+s. */
-const STALE_PARTIAL_MS = 5000;
+const STALE_PARTIAL_MS = 3000;
 const stalePartialTimers = new Map<string, ReturnType<typeof setTimeout>>();
 const interimPollyFired = new Set<string>(); // flag: interim already played, skip next final
 const latestPartialState = new Map<string, { translatedText: string; speaker: ParticipantInfo }>();
