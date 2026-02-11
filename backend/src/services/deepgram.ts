@@ -24,6 +24,7 @@ export class DeepgramTranscriptionSession {
   private startTime: number = 0;
   private chunkCount: number = 0;
   private apiKey: string;
+  private keepAliveInterval: ReturnType<typeof setInterval> | null = null;
 
   constructor(config: DeepgramConfig) {
     this.apiKey = config.apiKey;
@@ -83,6 +84,18 @@ export class DeepgramTranscriptionSession {
           latencyMs: connectionLatency,
           attendee: this.attendeeName,
         });
+
+        // Send KeepAlive every 8s to prevent Deepgram from closing
+        // the connection during audio gaps (e.g. tab in background)
+        this.keepAliveInterval = setInterval(() => {
+          if (this.connection && this.connectionOpen) {
+            try {
+              this.connection.keepAlive();
+            } catch {
+              // Connection may have closed between check and send
+            }
+          }
+        }, 8000);
       });
 
       // Event: Transcript received
@@ -150,6 +163,10 @@ export class DeepgramTranscriptionSession {
       // Event: Connection closed
       this.connection.on(LiveTranscriptionEvents.Close, () => {
         this.connectionOpen = false;
+        if (this.keepAliveInterval) {
+          clearInterval(this.keepAliveInterval);
+          this.keepAliveInterval = null;
+        }
         const totalDuration = Date.now() - this.startTime;
         logger.info('🔌 Deepgram connection CLOSED', {
           totalDurationMs: totalDuration,
@@ -213,6 +230,11 @@ export class DeepgramTranscriptionSession {
     });
 
     this.active = false;
+
+    if (this.keepAliveInterval) {
+      clearInterval(this.keepAliveInterval);
+      this.keepAliveInterval = null;
+    }
 
     if (this.connection) {
       try {

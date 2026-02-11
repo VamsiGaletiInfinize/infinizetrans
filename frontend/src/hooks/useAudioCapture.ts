@@ -31,6 +31,18 @@ export function useAudioCapture({
 
     // Create context at 16 kHz – the browser resamples from the mic rate
     const ctx = new AudioContext({ sampleRate: 16000 });
+
+    // Resume AudioContext if browser suspends it (e.g. tab in background)
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible' && ctx.state === 'suspended') {
+        ctx.resume();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+
+    // Also resume immediately in case it starts suspended
+    if (ctx.state === 'suspended') ctx.resume();
+
     const source = ctx.createMediaStreamSource(stream);
 
     // 512 samples @ 16 kHz ≈ 32 ms per frame (was 2048 = 128ms)
@@ -82,6 +94,7 @@ export function useAudioCapture({
     mute.connect(ctx.destination);
 
     return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
       processor.disconnect();
       source.disconnect();
       mute.disconnect();
