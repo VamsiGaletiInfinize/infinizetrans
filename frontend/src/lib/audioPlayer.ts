@@ -1,14 +1,15 @@
 /**
- * Queued audio player that decodes base64 MP3 blobs and plays them
- * sequentially through the Web Audio API.
+ * Real-time audio player for translated speech.
  *
- * Prevents overlapping audio when multiple translated segments arrive
- * in quick succession. Each clip plays after the previous one finishes.
+ * When new audio arrives, any queued clips are dropped and the currently
+ * playing clip is stopped — the latest translation is always the most
+ * relevant. This prevents delay from growing over time.
  */
 export class AudioPlayer {
   private ctx: AudioContext | null = null;
-  private queue: string[] = [];
+  private currentSource: AudioBufferSourceNode | null = null;
   private playing = false;
+  private pending: string | null = null;
 
   private getCtx(): AudioContext {
     if (!this.ctx) {
@@ -17,25 +18,26 @@ export class AudioPlayer {
     return this.ctx;
   }
 
-  /** Enqueue a base64-encoded MP3 blob for playback. */
+  /** Play a base64-encoded MP3 blob. Interrupts any currently playing audio. */
   async playMp3(base64: string): Promise<void> {
-    this.queue.push(base64);
+    // Stop whatever is playing — latest audio wins
+    this.stopCurrent();
+    this.pending = base64;
+
     if (!this.playing) {
       this.playing = true;
-      await this.processQueue();
+      await this.processNext();
     }
   }
 
-  private async processQueue(): Promise<void> {
-    while (this.queue.length > 0) {
-      const base64 = this.queue.shift()!;
+  private async processNext(): Promise<void> {
+    while (this.pending) {
+      const base64 = this.pending;
+      this.pending = null;
       try {
         const ctx = this.getCtx();
-
-        // Resume if suspended (browser autoplay policy)
         if (ctx.state === 'suspended') await ctx.resume();
 
-        // Decode base64 → ArrayBuffer
         const binary = atob(base64);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) {
@@ -56,18 +58,33 @@ export class AudioPlayer {
       const source = ctx.createBufferSource();
       source.buffer = buffer;
       source.connect(ctx.destination);
-      source.onended = () => resolve();
+      source.onended = () => {
+        if (this.currentSource === source) this.currentSource = null;
+        resolve();
+      };
+      this.currentSource = source;
       source.start();
     });
   }
 
-  /** Clear any queued audio (e.g. when switching languages). */
+  private stopCurrent(): void {
+    if (this.currentSource) {
+      try {
+        this.currentSource.stop();
+      } catch { /* already stopped */ }
+      this.currentSource = null;
+    }
+  }
+
+  /** Clear any pending audio. */
   clearQueue(): void {
-    this.queue.length = 0;
+    this.pending = null;
+    this.stopCurrent();
   }
 
   destroy(): void {
-    this.queue.length = 0;
+    this.pending = null;
+    this.stopCurrent();
     this.playing = false;
     this.ctx?.close();
     this.ctx = null;
