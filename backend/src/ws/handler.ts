@@ -26,6 +26,51 @@ const lastPartialTime = new Map<string, number>();
 const MAX_FRAME_BYTES = 65_536;
 
 /* ------------------------------------------------------------------ */
+/*  Incremental TTS state                                              */
+/*                                                                     */
+/*  Tracks how much of the current partial transcript has already      */
+/*  been translated + synthesized, so we can TTS sentence-by-sentence  */
+/*  instead of waiting for Transcribe's isFinal.                       */
+/* ------------------------------------------------------------------ */
+
+interface IncrementalTtsState {
+  /** Characters from the original (source-language) partial text already sent for TTS. */
+  spokenLength: number;
+  /** Pending TTS promise chain — ensures audio chunks are sent in order. */
+  ttsChain: Promise<void>;
+}
+
+const incrementalTtsState = new Map<string, IncrementalTtsState>();
+
+/** Sentence-ending punctuation across supported languages. */
+const SENTENCE_END_RE = /[.!?。！？]\s*/g;
+/** Minimum characters before we trigger incremental TTS (avoids tiny fragments). */
+const MIN_TTS_CHARS = 15;
+/** Force a TTS chunk if no sentence boundary found after this many new characters. */
+const FORCE_TTS_CHARS = 80;
+
+/**
+ * Find the position just after the last sentence-ending punctuation
+ * in `text` that occurs at or after `afterPos`.
+ * Returns -1 if no boundary found.
+ */
+function findLastSentenceEnd(text: string, afterPos: number): number {
+  SENTENCE_END_RE.lastIndex = afterPos;
+  let lastEnd = -1;
+  let m;
+  while ((m = SENTENCE_END_RE.exec(text)) !== null) {
+    lastEnd = m.index + m[0].length;
+  }
+  return lastEnd;
+}
+
+/** Find the last whitespace position in `text` for a clean word-boundary split. */
+function findLastWordBoundary(text: string): number {
+  const i = text.lastIndexOf(' ');
+  return i > 0 ? i : text.length;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Entry point                                                        */
 /* ------------------------------------------------------------------ */
 
@@ -129,11 +174,12 @@ function stopTranscription(connectionId: string): void {
     session.stop();
     transcriptionSessions.delete(connectionId);
     lastPartialTime.delete(connectionId);
+    incrementalTtsState.delete(connectionId);
   }
 }
 
 /* ------------------------------------------------------------------ */
-/*  Speech transcript → Translate → Caption + TTS to partner           */
+/*  Speech transcript → Translate → Caption + Incremental TTS          */
 /* ------------------------------------------------------------------ */
 
 async function onTranscriptResult(
@@ -147,24 +193,27 @@ async function onTranscriptResult(
   // Source language (Translate code, e.g. 'en', 'hi')
   const srcLang = transcribeToTranslateCode(detectedLanguage);
 
-  // Throttle partials
+  // Find the other participant in this 2-person call
+  const partner = connectionManager.getPartner(speaker.meetingId, connectionId);
+
+  // Target language: partner's spoken language (translate code)
+  const targetCode = partner
+    ? getTranslateCode(partner.info.spokenLanguage)
+    : getTranslateCode(speaker.targetLanguage);
+
+  // --- Incremental TTS: check every partial for sentence boundaries ---
+  // This runs before the caption throttle so we don't miss boundaries.
   if (!isFinal) {
+    enqueueIncrementalTts(connectionId, speaker, text, srcLang, partner, targetCode);
+
+    // Throttle partial caption updates (text-only display)
     const now = Date.now();
     const last = lastPartialTime.get(connectionId) ?? 0;
     if (now - last < PARTIAL_THROTTLE_MS) return;
     lastPartialTime.set(connectionId, now);
   }
 
-  // Find the other participant in this 2-person call
-  const partner = connectionManager.getPartner(speaker.meetingId, connectionId);
-
-  // Target language: partner's spoken language (translate code)
-  // Falls back to speaker's declared target if partner hasn't joined yet
-  const targetCode = partner
-    ? getTranslateCode(partner.info.spokenLanguage)
-    : getTranslateCode(speaker.targetLanguage);
-
-  // Translate (pivotTranslate internally optimizes for English pairs → 1 hop)
+  // Translate full text for caption display
   let translatedText = text;
   if (srcLang !== targetCode) {
     try {
@@ -175,8 +224,6 @@ async function onTranscriptResult(
       translatedText = text;
     }
   }
-
-  const tTranslated = Date.now();
 
   // Build caption event
   const caption: CaptionEvent = {
@@ -197,16 +244,119 @@ async function onTranscriptResult(
     partner.ws.send(JSON.stringify(caption));
   }
 
-  // For final transcripts: synthesize TTS and send audio to partner
+  // --- Final: TTS only the remaining un-spoken tail ---
   if (isFinal && partner && partner.ws.readyState === WebSocket.OPEN) {
-    console.log(
-      `[Timing] ${speaker.attendeeName} (${srcLang}) → ${partner.info.attendeeName} (${targetCode}): ` +
-      `translate=${tTranslated - t0}ms`
-    );
+    const state = incrementalTtsState.get(connectionId);
+    const spokenLen = state?.spokenLength ?? 0;
+    const remainingOriginal = text.substring(spokenLen).trim();
 
+    if (remainingOriginal.length > 0) {
+      // Translate just the remaining portion
+      let remainingTranslated = remainingOriginal;
+      if (srcLang !== targetCode) {
+        try {
+          const r = await pivotTranslate(remainingOriginal, srcLang, targetCode);
+          remainingTranslated = r.translatedText;
+        } catch {
+          remainingTranslated = remainingOriginal;
+        }
+      }
+
+      const tTranslated = Date.now();
+
+      try {
+        const audioBuffer = await synthesizeSpeech(remainingTranslated, partner.info.spokenLanguage);
+        if (audioBuffer && partner.ws.readyState === WebSocket.OPEN) {
+          const audioEvent: TranslatedAudioEvent = {
+            type: 'audio',
+            speakerAttendeeId: speaker.attendeeId,
+            audioData: audioBuffer.toString('base64'),
+            targetLanguage: targetCode,
+          };
+          partner.ws.send(JSON.stringify(audioEvent));
+
+          console.log(
+            `[Timing] Final tail "${remainingOriginal.substring(0, 40)}": ` +
+            `translate=${tTranslated - t0}ms, total=${Date.now() - t0}ms`
+          );
+        }
+      } catch (err: any) {
+        console.error(`[Polly] Final tail synthesis failed:`, err.message);
+      }
+    } else {
+      console.log(`[Timing] Final: all text already spoken incrementally (${Date.now() - t0}ms)`);
+    }
+
+    // Reset incremental state for the next speech segment
+    incrementalTtsState.delete(connectionId);
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/*  Incremental TTS — sentence-boundary detection on partials          */
+/*                                                                     */
+/*  As partial transcripts grow, we detect completed sentences and     */
+/*  immediately translate + synthesize them. This gives the listener   */
+/*  audio feedback during continuous speech, instead of waiting for    */
+/*  Transcribe's isFinal (which requires a pause).                     */
+/*                                                                     */
+/*  Uses a promise chain per connection to guarantee audio chunks      */
+/*  arrive at the client in the correct order.                         */
+/* ------------------------------------------------------------------ */
+
+function enqueueIncrementalTts(
+  connectionId: string,
+  speaker: ParticipantInfo,
+  originalText: string,
+  srcLang: string,
+  partner: { ws: WebSocket; info: ParticipantInfo } | null,
+  targetCode: string,
+): void {
+  if (!partner || partner.ws.readyState !== WebSocket.OPEN) return;
+
+  let state = incrementalTtsState.get(connectionId);
+  if (!state) {
+    state = { spokenLength: 0, ttsChain: Promise.resolve() };
+    incrementalTtsState.set(connectionId, state);
+  }
+
+  const newText = originalText.substring(state.spokenLength);
+  if (newText.length < MIN_TTS_CHARS) return;
+
+  // Look for a sentence boundary after the already-spoken position
+  let chunkEnd = findLastSentenceEnd(originalText, state.spokenLength);
+
+  // Fallback: if no sentence boundary but accumulated text is very long,
+  // split at the last word boundary to avoid holding too much un-spoken text.
+  if (chunkEnd <= state.spokenLength && newText.length > FORCE_TTS_CHARS) {
+    const wordBoundary = findLastWordBoundary(newText);
+    chunkEnd = state.spokenLength + wordBoundary;
+  }
+
+  if (chunkEnd <= state.spokenLength) return;
+
+  const chunk = originalText.substring(state.spokenLength, chunkEnd).trim();
+  if (chunk.length < MIN_TTS_CHARS) return;
+
+  // Update spoken length immediately so the next partial doesn't re-process
+  state.spokenLength = chunkEnd;
+
+  // Chain the TTS work to preserve audio ordering
+  state.ttsChain = state.ttsChain.then(async () => {
     try {
-      const tPollyStart = Date.now();
-      const audioBuffer = await synthesizeSpeech(translatedText, partner.info.spokenLanguage);
+      // Translate the chunk
+      let translatedChunk = chunk;
+      if (srcLang !== targetCode) {
+        try {
+          const r = await pivotTranslate(chunk, srcLang, targetCode);
+          translatedChunk = r.translatedText;
+        } catch {
+          translatedChunk = chunk;
+        }
+      }
+
+      // Synthesize and send audio
+      const audioBuffer = await synthesizeSpeech(translatedChunk, partner.info.spokenLanguage);
       if (audioBuffer && partner.ws.readyState === WebSocket.OPEN) {
         const audioEvent: TranslatedAudioEvent = {
           type: 'audio',
@@ -217,14 +367,13 @@ async function onTranscriptResult(
         partner.ws.send(JSON.stringify(audioEvent));
 
         console.log(
-          `[Timing] Polly ${targetCode}: synthesis=${Date.now() - tPollyStart}ms, ` +
-          `total_pipeline=${Date.now() - t0}ms`
+          `[IncrementalTTS] ${speaker.attendeeName}: "${chunk.substring(0, 50)}${chunk.length > 50 ? '...' : ''}" → ${targetCode}`
         );
       }
     } catch (err: any) {
-      console.error(`[Polly] Synthesis failed for ${targetCode}:`, err.message);
+      console.error(`[IncrementalTTS] Failed:`, err.message);
     }
-  }
+  });
 }
 
 /* ------------------------------------------------------------------ */

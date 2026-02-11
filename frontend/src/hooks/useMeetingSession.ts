@@ -152,13 +152,18 @@ export function useMeetingSession(
   }, []);
 
   /* ---------- toggle camera ---------- */
-  const toggleVideo = useCallback(() => {
+  const toggleVideo = useCallback(async () => {
     const av = sessionRef.current?.audioVideo;
     if (!av) return;
     if (videoOn) {
       av.stopLocalVideoTile();
+      await av.stopVideoInput();
       setVideoOn(false);
     } else {
+      const videoDevices = await av.listVideoInputDevices();
+      if (videoDevices.length) {
+        await av.startVideoInput(videoDevices[0].deviceId);
+      }
       av.startLocalVideoTile();
       setVideoOn(true);
     }

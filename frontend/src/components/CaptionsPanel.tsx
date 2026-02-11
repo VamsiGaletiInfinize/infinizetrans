@@ -20,32 +20,37 @@ export default function CaptionsPanel({ captions }: CaptionsPanelProps) {
 
   if (captions.length === 0) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-slate-500">
-        Captions appear here when someone speaks…
+      <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+        <svg className="mb-3 h-10 w-10 text-gray-300" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M7 8h10M7 12h4m1 8l-4-4H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-3l-4 4z" />
+        </svg>
+        <p className="text-sm text-gray-400">Captions appear here when someone speaks...</p>
       </div>
     );
   }
 
   return (
-    <div className="flex h-full flex-col gap-2 overflow-y-auto p-3">
+    <div className="captions-scroll flex h-full flex-col gap-1.5 overflow-y-auto p-3">
       {captions.map((c) => (
         <div
           key={c.id}
-          className={`rounded-lg px-3 py-2 text-sm ${
-            c.isFinal ? 'bg-slate-700' : 'bg-slate-700/50 italic text-slate-400'
+          className={`animate-fade-in rounded-xl px-3.5 py-2.5 text-sm ${
+            c.isFinal
+              ? 'bg-gray-50'
+              : 'bg-gray-50/60 italic text-gray-400'
           }`}
         >
-          <div className="mb-0.5 flex items-center gap-2">
-            <span className="font-semibold text-blue-400">{c.speakerName}</span>
+          <div className="mb-1 flex items-center gap-2">
+            <span className="font-semibold text-blue-600">{c.speakerName}</span>
             {c.detectedLanguage && (
-              <span className="rounded bg-slate-600 px-1.5 py-0.5 text-[10px] font-bold uppercase text-slate-300">
+              <span className="rounded-md bg-gray-200 px-1.5 py-0.5 text-[10px] font-bold uppercase text-gray-500">
                 {LANG_LABELS[c.detectedLanguage] || c.detectedLanguage}
               </span>
             )}
           </div>
-          <p className="text-slate-300">{c.originalText}</p>
+          <p className="text-gray-700">{c.originalText}</p>
           {c.translatedText !== c.originalText && (
-            <p className="mt-0.5 text-green-400">{c.translatedText}</p>
+            <p className="mt-1 text-emerald-600">{c.translatedText}</p>
           )}
         </div>
       ))}

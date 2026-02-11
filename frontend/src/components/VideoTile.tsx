@@ -24,7 +24,7 @@ export default function VideoTile({
   }, [tileId, bindVideo]);
 
   return (
-    <div className="relative overflow-hidden rounded-xl bg-slate-800 shadow-lg">
+    <div className="group relative overflow-hidden rounded-2xl bg-gray-800 shadow-md ring-1 ring-gray-900/5">
       <video
         ref={videoRef}
         className="h-full w-full object-cover"
@@ -32,9 +32,20 @@ export default function VideoTile({
         playsInline
         muted={isLocal}
       />
-      <span className="absolute bottom-2 left-2 rounded bg-black/60 px-2 py-0.5 text-xs text-white">
-        {isLocal ? 'You' : attendeeId.slice(0, 8)}
-      </span>
+      {/* Name label */}
+      <div className="absolute bottom-3 left-3 flex items-center gap-2">
+        <span className="rounded-lg bg-gray-900/70 px-3 py-1 text-xs font-medium text-white backdrop-blur-sm">
+          {isLocal ? 'You' : attendeeId.slice(0, 8)}
+        </span>
+      </div>
+      {/* Local badge */}
+      {isLocal && (
+        <div className="absolute right-3 top-3">
+          <span className="rounded-md bg-blue-600/80 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white backdrop-blur-sm">
+            Local
+          </span>
+        </div>
+      )}
     </div>
   );
 }
