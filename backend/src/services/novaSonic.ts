@@ -188,6 +188,8 @@ export class NovaSonicSession {
     } catch (err: any) {
       logger.error('[NovaSonic] Failed to start session', {
         error: err.message,
+        code: err.name || err.code,
+        stack: err.stack?.substring(0, 300),
         attendee: this.config.attendeeName,
       });
       this.active = false;
