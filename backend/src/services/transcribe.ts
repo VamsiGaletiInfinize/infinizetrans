@@ -72,6 +72,9 @@ export class TranscriptionSession {
   private active = true;
   private onTranscript: TranscriptCallback;
   private languageCode: string;
+  private restartCount = 0;
+  private static readonly MAX_RESTARTS = 5;
+  private static readonly RESTART_DELAY_MS = 1000;
 
   constructor(languageCode: string, onTranscript: TranscriptCallback) {
     this.languageCode = languageCode;
@@ -79,46 +82,72 @@ export class TranscriptionSession {
   }
 
   async start(): Promise<void> {
-    console.log(`[Transcribe] Fixed language session: ${this.languageCode}`);
-
-    try {
-      const response = await client.send(
-        new StartStreamTranscriptionCommand({
-          LanguageCode: this.languageCode as any,
-          MediaEncoding: 'pcm',
-          MediaSampleRateHertz: 16000,
-          AudioStream: this.audioQueue as any,
-        }),
+    while (this.active && this.restartCount <= TranscriptionSession.MAX_RESTARTS) {
+      console.log(
+        `[Transcribe] Fixed language session: ${this.languageCode}` +
+        (this.restartCount > 0 ? ` (restart #${this.restartCount})` : ''),
       );
 
-      if (!response.TranscriptResultStream) return;
-
-      for await (const event of response.TranscriptResultStream) {
-        if (!this.active) break;
-
-        const results = event.TranscriptEvent?.Transcript?.Results;
-        if (!results) continue;
-
-        for (const result of results) {
-          const transcript = result.Alternatives?.[0]?.Transcript;
-          if (!transcript) continue;
-
-          this.onTranscript({
-            text: transcript,
-            isFinal: !result.IsPartial,
-            detectedLanguage: this.languageCode,
-            startTimeMs: result.StartTime != null
-              ? Math.round(result.StartTime * 1000)
-              : undefined,
-            endTimeMs: result.EndTime != null
-              ? Math.round(result.EndTime * 1000)
-              : undefined,
-          });
-        }
+      // Fresh audio queue for each attempt
+      if (this.restartCount > 0) {
+        this.audioQueue = new AudioStreamQueue();
       }
-    } catch (err: any) {
-      if (this.active) {
-        console.error('[Transcribe] Session error:', err.message);
+
+      try {
+        const response = await client.send(
+          new StartStreamTranscriptionCommand({
+            LanguageCode: this.languageCode as any,
+            MediaEncoding: 'pcm',
+            MediaSampleRateHertz: 16000,
+            AudioStream: this.audioQueue as any,
+          }),
+        );
+
+        if (!response.TranscriptResultStream) return;
+
+        // Reset restart count on successful connection
+        this.restartCount = 0;
+
+        for await (const event of response.TranscriptResultStream) {
+          if (!this.active) break;
+
+          const results = event.TranscriptEvent?.Transcript?.Results;
+          if (!results) continue;
+
+          for (const result of results) {
+            const transcript = result.Alternatives?.[0]?.Transcript;
+            if (!transcript) continue;
+
+            this.onTranscript({
+              text: transcript,
+              isFinal: !result.IsPartial,
+              detectedLanguage: this.languageCode,
+              startTimeMs: result.StartTime != null
+                ? Math.round(result.StartTime * 1000)
+                : undefined,
+              endTimeMs: result.EndTime != null
+                ? Math.round(result.EndTime * 1000)
+                : undefined,
+            });
+          }
+        }
+      } catch (err: any) {
+        if (!this.active) return;
+
+        const errMsg = err?.message || err?.name || String(err);
+        this.restartCount++;
+        console.error(
+          `[Transcribe] Session error (attempt ${this.restartCount}/${TranscriptionSession.MAX_RESTARTS}): ${errMsg}`,
+        );
+
+        if (this.restartCount > TranscriptionSession.MAX_RESTARTS) {
+          console.error('[Transcribe] Max restarts reached, giving up.');
+          return;
+        }
+
+        // Wait before restarting (exponential backoff)
+        const delay = TranscriptionSession.RESTART_DELAY_MS * this.restartCount;
+        await new Promise((r) => setTimeout(r, delay));
       }
     }
   }

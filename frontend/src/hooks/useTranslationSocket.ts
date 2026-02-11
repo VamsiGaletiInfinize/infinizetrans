@@ -12,6 +12,10 @@ export interface TranslationSocketOptions {
   targetLanguage: string;
 }
 
+const MAX_RECONNECT_ATTEMPTS = 10;
+const INITIAL_RECONNECT_DELAY = 500;
+const MAX_RECONNECT_DELAY = 8000;
+
 export function useTranslationSocket(
   options: TranslationSocketOptions | null,
 ) {
@@ -20,15 +24,26 @@ export function useTranslationSocket(
 
   const wsRef = useRef<WebSocket | null>(null);
   const playerRef = useRef<AudioPlayer | null>(null);
+  const reconnectAttempts = useRef(0);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const optionsRef = useRef(options);
+  optionsRef.current = options;
+  const intentionalClose = useRef(false);
 
   const sendAudioFrame = useCallback((pcm: ArrayBuffer) => {
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) ws.send(pcm);
   }, []);
 
-  // Connect / disconnect
-  useEffect(() => {
-    if (!options) return;
+  const connectWs = useCallback(() => {
+    const opts = optionsRef.current;
+    if (!opts) return;
+
+    // Clean up any existing connection
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch {}
+      wsRef.current = null;
+    }
 
     const wsUrl = process.env.NEXT_PUBLIC_WS_URL || 'ws://localhost:3001/ws';
     const ws = new WebSocket(wsUrl);
@@ -38,13 +53,16 @@ export function useTranslationSocket(
 
     ws.onopen = () => {
       setConnected(true);
+      reconnectAttempts.current = 0;
+      console.log('[WS] Connected');
+
       const join: WsJoinMessage = {
         action: 'join',
-        meetingId: options.meetingId,
-        attendeeId: options.attendeeId,
-        attendeeName: options.attendeeName,
-        spokenLanguage: options.spokenLanguage,
-        targetLanguage: options.targetLanguage,
+        meetingId: opts.meetingId,
+        attendeeId: opts.attendeeId,
+        attendeeName: opts.attendeeName,
+        spokenLanguage: opts.spokenLanguage,
+        targetLanguage: opts.targetLanguage,
       };
       ws.send(JSON.stringify(join));
     };
@@ -63,12 +81,52 @@ export function useTranslationSocket(
       } catch { /* ignore non-JSON (e.g. joined ack) */ }
     };
 
-    ws.onclose = () => setConnected(false);
-    ws.onerror = () => {};
+    ws.onclose = () => {
+      setConnected(false);
+      wsRef.current = null;
+
+      // Auto-reconnect unless intentionally closed
+      if (!intentionalClose.current && optionsRef.current) {
+        const attempt = reconnectAttempts.current;
+        if (attempt < MAX_RECONNECT_ATTEMPTS) {
+          const delay = Math.min(
+            INITIAL_RECONNECT_DELAY * Math.pow(2, attempt),
+            MAX_RECONNECT_DELAY,
+          );
+          console.log(`[WS] Reconnecting in ${delay}ms (attempt ${attempt + 1}/${MAX_RECONNECT_ATTEMPTS})`);
+          reconnectTimer.current = setTimeout(() => {
+            reconnectAttempts.current++;
+            connectWs();
+          }, delay);
+        } else {
+          console.error('[WS] Max reconnect attempts reached');
+        }
+      }
+    };
+
+    ws.onerror = (err) => {
+      console.error('[WS] Socket error:', err);
+    };
+  }, []);
+
+  // Connect / disconnect
+  useEffect(() => {
+    if (!options) return;
+
+    intentionalClose.current = false;
+    reconnectAttempts.current = 0;
+    connectWs();
 
     return () => {
-      ws.close();
-      wsRef.current = null;
+      intentionalClose.current = true;
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [options?.meetingId, options?.attendeeId]);

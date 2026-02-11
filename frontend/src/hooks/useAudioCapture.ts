@@ -29,14 +29,17 @@ export function useAudioCapture({
   useEffect(() => {
     if (!enabled || !stream) return;
 
+    let disposed = false;
+
     // Create context at 16 kHz – the browser resamples from the mic rate
     const ctx = new AudioContext({ sampleRate: 16000 });
     const source = ctx.createMediaStreamSource(stream);
 
-    // 512 samples @ 16 kHz ≈ 32 ms per frame (was 2048 = 128ms)
+    // 512 samples @ 16 kHz ≈ 32 ms per frame
     const processor = ctx.createScriptProcessor(512, 1, 1);
 
     processor.onaudioprocess = (e: AudioProcessingEvent) => {
+      if (disposed) return;
       const float32 = e.inputBuffer.getChannelData(0);
 
       // float32 [-1, 1] → int16 [-32768, 32767]
@@ -58,11 +61,25 @@ export function useAudioCapture({
     processor.connect(mute);
     mute.connect(ctx.destination);
 
+    // Resume AudioContext if browser suspends it (autoplay policy)
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+
+    // Periodically check AudioContext state and resume if needed
+    const resumeInterval = setInterval(() => {
+      if (!disposed && ctx.state === 'suspended') {
+        ctx.resume().catch(() => {});
+      }
+    }, 2000);
+
     return () => {
+      disposed = true;
+      clearInterval(resumeInterval);
       processor.disconnect();
       source.disconnect();
       mute.disconnect();
-      ctx.close();
+      ctx.close().catch(() => {});
     };
   }, [enabled, stream]);
 }
